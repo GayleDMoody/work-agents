@@ -1,0 +1,18 @@
+{
+  "key": "PROJ-103",
+  "fields": {
+    "summary": "Refactor authentication middleware to use dependency injection",
+    "description": "The current auth middleware directly instantiates its dependencies (user repository, token validator). This makes it hard to test and violates DI principles.\n\n## Scope\n- Refactor AuthMiddleware to accept dependencies via constructor\n- Update all usages in the app startup\n- Add unit tests for the middleware with mocked dependencies\n\n## Files likely affected\n- src/middleware/auth.py\n- src/app.py\n- tests/test_auth.py (new)",
+    "issuetype": {"name": "Task"},
+    "priority": {"name": "Low"},
+    "labels": ["backend", "tech-debt"],
+    "components": [{"name": "api"}],
+    "status": {"name": "Ready for AI"},
+    "reporter": {"displayName": "Alice Dev", "emailAddress": "alice@company.com"},
+    "assignee": null,
+    "customfield_10016": 3,
+    "comment": {"comments": []},
+    "issuelinks": [],
+    "attachment": []
+  }
+}

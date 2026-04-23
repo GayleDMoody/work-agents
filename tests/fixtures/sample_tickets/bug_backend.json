@@ -1,0 +1,18 @@
+{
+  "key": "PROJ-102",
+  "fields": {
+    "summary": "500 error when fetching user with special characters in name",
+    "description": "## Bug Report\n\nGET /api/users?name=O'Brien returns 500 Internal Server Error.\n\n## Steps to Reproduce\n1. Create a user with name \"O'Brien\"\n2. Call GET /api/users?name=O'Brien\n3. Server returns 500\n\n## Expected\nShould return the user record.\n\n## Actual\n500 error. Logs show: `sqlalchemy.exc.ProgrammingError: unterminated string literal`\n\n## Root Cause (suspected)\nSQL injection vulnerability in the user search query. The name parameter is not being properly escaped/parameterized.",
+    "issuetype": {"name": "Bug"},
+    "priority": {"name": "High"},
+    "labels": ["backend", "security", "bug"],
+    "components": [{"name": "api"}],
+    "status": {"name": "Ready for AI"},
+    "reporter": {"displayName": "Bob QA", "emailAddress": "bob@company.com"},
+    "assignee": null,
+    "customfield_10016": 2,
+    "comment": {"comments": []},
+    "issuelinks": [],
+    "attachment": []
+  }
+}

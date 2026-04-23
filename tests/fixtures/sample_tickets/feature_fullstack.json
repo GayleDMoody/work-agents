@@ -1,0 +1,28 @@
+{
+  "key": "PROJ-101",
+  "fields": {
+    "summary": "Add user profile page with avatar upload",
+    "description": "As a user, I want to view and edit my profile information including uploading a profile picture.\n\n## Requirements\n- Display user name, email, bio\n- Allow editing all profile fields\n- Support avatar image upload (max 5MB, jpg/png)\n- Show upload progress\n- Validate image dimensions (min 100x100, max 2000x2000)\n\n## Technical Notes\n- Backend: new /api/users/{id}/profile endpoint\n- Frontend: new ProfilePage component\n- Store images in S3",
+    "issuetype": {"name": "Story"},
+    "priority": {"name": "Medium"},
+    "labels": ["frontend", "backend", "user-feature"],
+    "components": [{"name": "web-app"}, {"name": "api"}],
+    "status": {"name": "Ready for AI"},
+    "reporter": {"displayName": "Jane Product", "emailAddress": "jane@company.com"},
+    "assignee": null,
+    "customfield_10016": 5,
+    "comment": {
+      "comments": [
+        {
+          "author": {"displayName": "Jane Product"},
+          "body": "Design mockups are in Figma: [link]. Please follow the existing card layout pattern.",
+          "created": "2025-01-15T10:30:00.000+0000"
+        }
+      ]
+    },
+    "issuelinks": [
+      {"outwardIssue": {"key": "PROJ-50"}, "type": {"outward": "relates to"}}
+    ],
+    "attachment": []
+  }
+}

@@ -1,0 +1,83 @@
+agents:
+  product:
+    model: claude-sonnet-4-20250514
+    max_retries: 2
+    capabilities:
+      - requirements_analysis
+    trigger_rules:
+      - always: true
+    system_prompt_file: prompts/product_agent.md
+    approval_required: false
+
+  pm:
+    model: claude-sonnet-4-20250514
+    max_retries: 2
+    capabilities:
+      - planning
+    trigger_rules:
+      - always: true
+    system_prompt_file: prompts/pm_agent.md
+    approval_required: false
+
+  architect:
+    model: claude-sonnet-4-20250514
+    max_retries: 1
+    capabilities:
+      - architecture
+    trigger_rules:
+      - ticket_type: [feature, refactor]
+        complexity: [L, XL]
+      - estimated_files_gt: 3
+    system_prompt_file: prompts/architect_agent.md
+    approval_required: true
+
+  frontend:
+    model: claude-sonnet-4-20250514
+    max_retries: 3
+    capabilities:
+      - frontend_code
+    trigger_rules:
+      - scope_includes: frontend
+    system_prompt_file: prompts/frontend_agent.md
+    approval_required: false
+
+  backend:
+    model: claude-sonnet-4-20250514
+    max_retries: 3
+    capabilities:
+      - backend_code
+    trigger_rules:
+      - scope_includes: backend
+    system_prompt_file: prompts/backend_agent.md
+    approval_required: false
+
+  qa:
+    model: claude-sonnet-4-20250514
+    max_retries: 2
+    capabilities:
+      - testing
+    trigger_rules:
+      - always_after: [frontend, backend]
+    system_prompt_file: prompts/qa_agent.md
+    approval_required: false
+
+  devops:
+    model: claude-sonnet-4-20250514
+    max_retries: 2
+    capabilities:
+      - devops
+    trigger_rules:
+      - ticket_type: [infra]
+      - has_config_changes: true
+    system_prompt_file: prompts/devops_agent.md
+    approval_required: true
+
+  code_review:
+    model: claude-sonnet-4-20250514
+    max_retries: 1
+    capabilities:
+      - code_review
+    trigger_rules:
+      - always_after: [qa]
+    system_prompt_file: prompts/code_review_agent.md
+    approval_required: false

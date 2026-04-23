@@ -1,0 +1,76 @@
+pipeline:
+  phases:
+    - name: intake
+      description: Receive and parse Jira ticket
+      timeout_seconds: 30
+    - name: classification
+      description: Classify ticket type, scope, and complexity
+      timeout_seconds: 60
+      agents: [router]
+    - name: planning
+      description: Create execution plan
+      timeout_seconds: 120
+      agents: [product, pm]
+    - name: architecture
+      description: Design technical approach
+      timeout_seconds: 180
+      agents: [architect]
+      conditional: true
+    - name: execution
+      description: Write code
+      timeout_seconds: 600
+      agents: [frontend, backend]
+      allow_parallel: true
+    - name: testing
+      description: Write and run tests
+      timeout_seconds: 300
+      agents: [qa]
+    - name: review
+      description: Code review
+      timeout_seconds: 180
+      agents: [code_review]
+    - name: deployment
+      description: Prepare deployment
+      timeout_seconds: 120
+      agents: [devops]
+      conditional: true
+    - name: complete
+      description: Pipeline finished
+
+approval_gates:
+  ticket_clarification:
+    trigger: ticket_unclear_or_xl
+    mandatory: true
+    timeout_hours: 24
+    mechanism: jira_comment
+  architecture:
+    trigger: architect_agent_completes
+    mandatory_for_complexity: [L, XL]
+    timeout_hours: 24
+    mechanism: jira_comment
+  pre_merge:
+    trigger: code_review_approves
+    mandatory: true
+    timeout_hours: 24
+    mechanism: jira_comment
+  deployment:
+    trigger: devops_agent_completes
+    mandatory: false
+    timeout_hours: 12
+    mechanism: jira_comment
+
+retry_policy:
+  max_retries: 3
+  backoff_strategy: exponential
+  backoff_base_seconds: 2
+  max_backoff_seconds: 60
+
+feedback_loops:
+  max_cycles: 3
+  escalation_strategy: human_review
+  escalation_after_cycles: 3
+
+process:
+  default_type: hierarchical
+  allow_parallel_execution: true
+  checkpoint_after_each_phase: true
