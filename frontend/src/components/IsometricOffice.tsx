@@ -32,16 +32,17 @@ const AGENT_VISUALS: Record<string, { color: string; label: string; busyText: st
 const SVG_W = 1000;
 const SVG_H = 500;
 
-// Iso projection — scale + offset tuned so the 8-desk scene fits 1000×500
-// with comfortable margins. Desks span wx 3..15 wy 2..6; floor extends 1..17 × 0.5..7.5.
+// Iso projection — scale + offset tuned so the 8-desk scene fills 1000×500
+// with tight margins (no stage labels taking space above).
 //
-// Given ISO_SX=35, the iso_x span of the scene is ~(wx_max - wy_min) * ISO_SX -
-//   (wx_min - wy_max) * ISO_SX ≈ 805 SVG units → fits 1000 with ~97 margin each side.
-// OFFSET_X=325 / OFFSET_Y=50 centres the scene in the viewBox.
-const ISO_SX = 35;
-const ISO_SY = 17.5;
-const OFFSET_X = 325;
-const OFFSET_Y = 50;
+// Horizontal iso span ≈ (wx_max - wy_min + wy_max - wx_min) * ISO_SX
+//   = (16.3 - 1.2 + 6.8 - 1.7) * 42 ≈ 848 → ~76 margin each side in 1000 wide.
+// Vertical   iso span ≈ (wx_max + wy_max) * ISO_SY - (top of monitor) ≈ 489.
+//   ISO_SY = ISO_SX / 2 keeps the pixel-art 2:1 dimetric aspect.
+const ISO_SX = 42;
+const ISO_SY = 21;
+const OFFSET_X = 290;
+const OFFSET_Y = 10;
 
 function iso(wx: number, wy: number, wz: number = 0): [number, number] {
   return [
@@ -183,9 +184,6 @@ export default function IsometricOffice({ agents, onAgentClick }: Props) {
             })}
           </g>
 
-          {/* Stage labels above the back wall area */}
-          <StageLabels />
-
           {/* Workstations, painted back-to-front */}
           {paintOrdered.map(ws => {
             const agent = agentMap.get(ws.id);
@@ -296,35 +294,6 @@ function FloorLink({
           />
         </circle>
       )}
-    </g>
-  );
-}
-
-/** Pipeline-stage header row along the top — unrelated to iso coords so the
- *  stages read left-to-right in reading order rather than along the diagonal. */
-function StageLabels() {
-  const labels: { label: string; x: number }[] = [
-    { label: 'INTAKE',   x: 90  },
-    { label: 'PLAN',     x: 245 },
-    { label: 'DESIGN',   x: 400 },
-    { label: 'BUILD',    x: 555 },
-    { label: 'TEST',     x: 720 },
-    { label: 'REVIEW',   x: 890 },
-  ];
-  return (
-    <g className="iso-stage-labels" pointerEvents="none">
-      {labels.map(({ label, x }) => (
-        <text key={label} x={x} y={22}
-          textAnchor="middle"
-          fontSize="12"
-          fontWeight="800"
-          letterSpacing="3"
-          fill="rgba(88,166,255,0.28)"
-          style={{ userSelect: 'none', fontFamily: 'inherit' }}
-        >
-          {label}
-        </text>
-      ))}
     </g>
   );
 }
