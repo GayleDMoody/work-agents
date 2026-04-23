@@ -267,13 +267,15 @@ export default function IsometricOffice({ agents, onAgentClick }: Props) {
   );
 }
 
-// Floor extent — larger than the desk cluster so the office feels roomy.
-// Corners that fall outside the 1000×500 viewBox are clipped by the stage,
-// which creates a natural "floor continues off-camera" feel.
+// Floor extent. Dimensions chosen so every axis divides cleanly by the tile
+// size (TILE=2) — span x = 22 = 11 tiles, span y = 10 = 5 tiles. No tile
+// bleeds past the floor and every desk sits fully on it (Backend at wy=8.5
+// has its front at wy~9.08 which fits inside FLOOR_Y1=9.5).
 const FLOOR_X0 = -2;
 const FLOOR_X1 = 20;
 const FLOOR_Y0 = -0.5;
-const FLOOR_Y1 = 8.5;
+const FLOOR_Y1 = 9.5;
+const TILE = 2;
 
 /** Large floor plane with diamond tile pattern — a parallelogram in iso view. */
 function Floor() {
@@ -283,9 +285,12 @@ function Floor() {
   const c4 = iso(FLOOR_X0, FLOOR_Y1);
   const d = ptsToPath([c1, c2, c3, c4]);
 
-  // 2×2 world-unit tiles alternating between two subtle shades
+  // Unique clip-path id per mount in case multiple offices ever share the page.
+  const clipId = 'iso-floor-clip';
+
+  // 2×2 world-unit tiles alternating between two subtle shades.
+  // Tiles are clipped to the floor shape so they never extend past the edge.
   const tiles: React.ReactNode[] = [];
-  const TILE = 2;
   for (let y = FLOOR_Y0; y < FLOOR_Y1; y += TILE) {
     for (let x = FLOOR_X0; x < FLOOR_X1; x += TILE) {
       const tc1 = iso(x, y);
@@ -300,9 +305,9 @@ function Floor() {
         <path
           key={`tile-${ix}-${iy}`}
           d={tileD}
-          fill={isDark ? 'rgba(255,255,255,0.020)' : 'rgba(255,255,255,0.055)'}
-          stroke="rgba(88,166,255,0.08)"
-          strokeWidth="0.6"
+          fill={isDark ? 'rgba(255,255,255,0.020)' : 'rgba(255,255,255,0.050)'}
+          stroke="rgba(88,166,255,0.06)"
+          strokeWidth="0.5"
         />,
       );
     }
@@ -310,10 +315,15 @@ function Floor() {
 
   return (
     <g className="iso-floor">
+      <defs>
+        <clipPath id={clipId}>
+          <path d={d} />
+        </clipPath>
+      </defs>
       <path d={d} fill="url(#floor-grad)" opacity="0.95" />
-      {tiles}
-      {/* Perimeter accent — slightly brighter so the floor edge reads */}
-      <path d={d} fill="none" stroke="rgba(88,166,255,0.22)" strokeWidth="1.2" />
+      <g clipPath={`url(#${clipId})`}>{tiles}</g>
+      {/* No hard perimeter stroke — the tile grid already defines the floor edge,
+          and a bright outline cuts a distracting diagonal across the viewport. */}
     </g>
   );
 }
