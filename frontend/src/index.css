@@ -1004,11 +1004,29 @@ tr:hover td { background: var(--bg-hover); }
 
 @keyframes nebula-drift { 0%{transform:translate(0,0) scale(1)} 100%{transform:translate(2%,-1.5%) scale(1.03)} }
 
-/* --- Hex viewport --- */
+/* --- Hex viewport ---
+   Fills the available dashboard area and centres the stage within it.
+   container-type: size enables cqw/cqh for the stage's aspect-locked sizing. */
 .hex-office-viewport {
   position: absolute;
   inset: 48px 0 40px;
   overflow: hidden;
+  display: grid;
+  place-items: center;
+  container-type: size;
+}
+
+/* Stage — locks a 2:1 aspect ratio matching the SVG viewBox so the diagram
+   never distorts. Picks the largest 2:1 rectangle that fits the container:
+     width  = min(full container width, twice the container height)
+     height = aspect-ratio derives from width
+   Works at any viewport — wide + tall, wide + short, narrow + tall, etc. */
+.hex-office-stage {
+  position: relative;
+  aspect-ratio: 2 / 1;
+  width: min(100cqw, 200cqh);
+  max-width: 100%;
+  max-height: 100%;
 }
 
 /* --- Background particles --- */
@@ -1171,11 +1189,14 @@ tr:hover td { background: var(--bg-hover); }
   text-shadow: 0 1px 2px rgba(0,0,0,.7);
 }
 
-/* Speech bubble — positioned to the right of the node body so it never covers connection lines */
+/* Speech bubble — positioned above the node body.
+   In the horizontal layout, connection lines are mostly horizontal along the
+   spine, so a bubble *above* a busy node doesn't cover any line. */
 .hex-speech {
   position: absolute;
-  top: 18px;                    /* vertically aligned with body center */
-  left: calc(50% + 46px);       /* body half-width (38) + gap (8) */
+  bottom: calc(100% + 10px);    /* 10px gap above the node container */
+  left: 50%;
+  transform: translateX(-50%);
   background: rgba(10,12,20,.92);
   backdrop-filter: blur(8px);
   border: 1px solid;
@@ -1191,15 +1212,9 @@ tr:hover td { background: var(--bg-hover); }
   box-shadow: 0 4px 16px rgba(0,0,0,.5);
 }
 
-/* Center node (PM) has a larger body — shift the bubble farther right */
-.hex-node--center .hex-speech {
-  left: calc(50% + 52px);       /* larger body half-width (44) + gap (8) */
-  top: 22px;
-}
-
 @keyframes hex-bubble {
-  from { opacity: 0; transform: translateX(-6px); }
-  to   { opacity: 1; transform: translateX(0); }
+  from { opacity: 0; transform: translate(-50%, 6px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
 }
 
 /* Error badge */

@@ -12,47 +12,45 @@ const AGENT_VISUALS: Record<string, { color: string; label: string; busyText: st
 };
 
 /**
- * All positions are defined in SVG coordinate space (SVG_W × SVG_H).
- * HTML node positions are derived as percentages from those same coordinates,
- * so nodes stay perfectly aligned with connection lines at every viewport size.
+ * Horizontal pipeline topology in a 2:1 SVG coordinate space.
  *
- * Pipeline topology:
+ * The container CSS locks a 2:1 aspect ratio so the SVG never distorts regardless
+ * of viewport size. Everything scales together: lines, stage labels, and HTML
+ * nodes (positioned via percentages derived from SVG coordinates).
  *
- *           [Product]          x=500  (center)
- *               ↓
- *             [PM]             x=500
- *               ↓
- *          [Architect]         x=500
- *         ↙    ↓    ↘
- * [Frontend] [Backend] [DevOps]   x=175, 500, 825 (symmetric)
- *         ↘   ↙
- *          [QA]                x=337 (midpoint of Frontend + Backend)
- *            ↓
- *       [Code Review]          x=337
+ *                     [Frontend]
+ *                    ↗
+ * [Product]→[PM]→[Architect]→[Backend]→[QA]→[Reviewer]
+ *                    ↘
+ *                     [DevOps]
+ *
+ *   INTAKE    PLAN    DESIGN    BUILD    TEST    REVIEW   ← column stage labels
+ *
+ * The main spine runs horizontally along y=250 (centre). Frontend sits above,
+ * DevOps below — giving a layout that's symmetric about the horizontal axis
+ * and about every column. Fits on short viewports without clipping.
  */
 const SVG_W = 1000;
-const SVG_H = 760;
+const SVG_H = 500;
 
-// Each consecutive vertically-stacked pair needs ≥ ~120 SVG units between centers
-// so the upper node's label + margin don't cover the connection line.
 const SVG_NODES: { id: string; x: number; y: number }[] = [
-  { id: 'product',     x: 500, y: 45  },
-  { id: 'pm',          x: 500, y: 175 },   // 130-unit gap from product
-  { id: 'architect',   x: 500, y: 325 },   // 150-unit gap from pm (extra clearance for speech bubble)
-  { id: 'frontend',    x: 175, y: 455 },   // 130-unit gap from architect
-  { id: 'backend',     x: 500, y: 455 },
-  { id: 'devops',      x: 825, y: 455 },
-  { id: 'qa',          x: 337, y: 575 },   // midpoint x of frontend(175) + backend(500) = 337
-  { id: 'code_review', x: 337, y: 690 },   // 115-unit gap from qa
+  { id: 'product',     x: 80,  y: 250 },
+  { id: 'pm',          x: 240, y: 250 },
+  { id: 'architect',   x: 400, y: 250 },
+  { id: 'frontend',    x: 560, y: 130 },   // above the main spine
+  { id: 'backend',     x: 560, y: 250 },   // on the main spine
+  { id: 'devops',      x: 560, y: 370 },   // below the main spine, mirroring Frontend
+  { id: 'qa',          x: 760, y: 250 },   // back on the spine
+  { id: 'code_review', x: 920, y: 250 },
 ];
 
-const STAGE_LABELS: { label: string; y: number }[] = [
-  { label: 'INTAKE',  y: 45  },
-  { label: 'PLAN',    y: 175 },
-  { label: 'DESIGN',  y: 325 },
-  { label: 'BUILD',   y: 455 },
-  { label: 'TEST',    y: 575 },
-  { label: 'REVIEW',  y: 690 },
+const STAGE_LABELS: { label: string; x: number }[] = [
+  { label: 'INTAKE',  x: 80  },
+  { label: 'PLAN',    x: 240 },
+  { label: 'DESIGN',  x: 400 },
+  { label: 'BUILD',   x: 560 },
+  { label: 'TEST',    x: 760 },
+  { label: 'REVIEW',  x: 920 },
 ];
 
 const CONNECTIONS: [string, string][] = [
@@ -77,59 +75,67 @@ export default function IsometricOffice({ agents, onAgentClick }: Props) {
 
   return (
     <div className="hex-office-viewport">
-      {/* Ambient background particles — deterministic positions to avoid re-render flicker */}
-      <div className="hex-bg-particles" aria-hidden="true">
-        {Array.from({ length: 20 }).map((_, i) => (
-          <div
-            key={i}
-            className="hex-particle"
-            style={{
-              left:              `${(i * 37 + 11) % 100}%`,
-              top:               `${(i * 53 + 7) % 100}%`,
-              animationDelay:    `${(i * 0.71) % 8}s`,
-              animationDuration: `${6 + (i % 6)}s`,
-              width:             `${2 + (i % 3)}px`,
-              height:            `${2 + (i % 3)}px`,
-              opacity:           0.12 + (i % 5) * 0.03,
-            }}
-          />
-        ))}
-      </div>
-
       {/*
-        SVG layer — connection lines + stage labels.
-        Uses preserveAspectRatio="none" so it exactly fills the container,
-        matching the percentage-based HTML node positions derived below.
+        Stage — fixed 2:1 aspect ratio box that centres itself in the available space.
+        SVG viewBox is also 2:1, so preserveAspectRatio="none" never distorts. HTML
+        node positions use percentages derived from SVG coords, so everything stays
+        aligned at every viewport size.
       */}
-      <svg
-        className="hex-connections"
-        viewBox={`0 0 ${SVG_W} ${SVG_H}`}
-        preserveAspectRatio="none"
-        aria-hidden="true"
-      >
-        <defs>
-          <filter id="conn-glow" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="3" result="blur" />
-            <feComposite in="SourceGraphic" in2="blur" operator="over" />
-          </filter>
-        </defs>
+      <div className="hex-office-stage">
+        {/* Ambient background particles — deterministic positions to avoid re-render flicker */}
+        <div className="hex-bg-particles" aria-hidden="true">
+          {Array.from({ length: 20 }).map((_, i) => (
+            <div
+              key={i}
+              className="hex-particle"
+              style={{
+                left:              `${(i * 37 + 11) % 100}%`,
+                top:               `${(i * 53 + 7) % 100}%`,
+                animationDelay:    `${(i * 0.71) % 8}s`,
+                animationDuration: `${6 + (i % 6)}s`,
+                width:             `${2 + (i % 3)}px`,
+                height:            `${2 + (i % 3)}px`,
+                opacity:           0.12 + (i % 5) * 0.03,
+              }}
+            />
+          ))}
+        </div>
 
-        {/* Stage labels — SVG user units for consistent scaling */}
-        {STAGE_LABELS.map(({ label, y }) => (
-          <text
-            key={label}
-            x={870}
-            y={y}
-            fontSize="20"
-            fontWeight="800"
-            letterSpacing="3"
-            fill="rgba(88,166,255,.15)"
-            dominantBaseline="middle"
-            style={{ userSelect: 'none', fontFamily: 'inherit' }}
-          >
-            {label}
-          </text>
-        ))}
+        {/*
+          SVG layer — connection lines + stage labels.
+          Container is 2:1 and viewBox is 2:1, so preserveAspectRatio="none" produces
+          no distortion while keeping HTML percentage positions trivially aligned.
+        */}
+        <svg
+          className="hex-connections"
+          viewBox={`0 0 ${SVG_W} ${SVG_H}`}
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          <defs>
+            <filter id="conn-glow" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="3" result="blur" />
+              <feComposite in="SourceGraphic" in2="blur" operator="over" />
+            </filter>
+          </defs>
+
+          {/* Stage labels — column headers above each node column */}
+          {STAGE_LABELS.map(({ label, x }) => (
+            <text
+              key={label}
+              x={x}
+              y={40}
+              fontSize="18"
+              fontWeight="800"
+              letterSpacing="3"
+              fill="rgba(88,166,255,.18)"
+              textAnchor="middle"
+              dominantBaseline="middle"
+              style={{ userSelect: 'none', fontFamily: 'inherit' }}
+            >
+              {label}
+            </text>
+          ))}
 
         {/*
           Connection lines — drawn center-to-center. Each node's opaque body
@@ -223,6 +229,7 @@ export default function IsometricOffice({ agents, onAgentClick }: Props) {
           </div>
         );
       })}
+      </div>
     </div>
   );
 }
