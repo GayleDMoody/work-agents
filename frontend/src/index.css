@@ -1029,221 +1029,91 @@ tr:hover td { background: var(--bg-hover); }
   max-height: 100%;
 }
 
-/* --- Background particles --- */
-.hex-bg-particles { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
-
-.hex-particle {
-  position: absolute;
-  border-radius: 50%;
-  background: rgba(88,166,255,.5);
-  animation: particle-float linear infinite;
-}
-
-@keyframes particle-float {
-  0% { transform: translateY(0) scale(1); opacity: 0; }
-  20% { opacity: 1; }
-  80% { opacity: 1; }
-  100% { transform: translateY(-80px) scale(0.3); opacity: 0; }
-}
-
-/* --- Connection lines --- */
-.hex-connections {
+/* Isometric office SVG fills the stage */
+.iso-office-svg {
   position: absolute;
   inset: 0;
-  z-index: 1;
-  pointer-events: none;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
 }
 
-/* vector-effect="non-scaling-stroke" on the <line> keeps these widths in screen pixels,
-   so lines stay crisp under preserveAspectRatio="none" non-uniform scaling. */
-.hex-conn-line {
-  stroke: rgba(88,166,255,.6);
-  stroke-width: 1.8;
-  stroke-dasharray: 7 5;
+/* Each workstation group — hoverable, clickable */
+.iso-ws {
+  transition: transform .25s ease, filter .25s ease;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.iso-ws:hover {
+  filter: drop-shadow(0 0 12px rgba(88,166,255,.35));
+}
+.iso-ws:focus-visible {
+  outline: none;
+  filter: drop-shadow(0 0 14px rgba(88,166,255,.55));
+}
+
+/* The soft glow under each desk brightens on hover */
+.iso-ws-glow { transition: opacity .3s ease; }
+.iso-ws:hover .iso-ws-glow { opacity: .5 !important; }
+
+/* Busy-state monitor pulse — a soft breathing glow on the screen */
+.iso-ws--busy .iso-screen-pulse {
+  animation: iso-screen-pulse 1.6s ease-in-out infinite;
+}
+@keyframes iso-screen-pulse {
+  0%, 100% { opacity: .15; }
+  50%      { opacity: .42; }
+}
+/* Busy underglow pulses too */
+.iso-ws--busy .iso-ws-glow {
+  animation: iso-glow-pulse 2s ease-in-out infinite;
+}
+@keyframes iso-glow-pulse {
+  0%, 100% { opacity: .32; }
+  50%      { opacity: .55; }
+}
+
+/* Error-state gets a quick shake + persistent red tint */
+.iso-ws--error .iso-ws-glow { animation: none; }
+.iso-ws--error {
+  animation: iso-error-shake 2.5s ease-in-out infinite;
+}
+@keyframes iso-error-shake {
+  0%, 92%, 100% { transform: translateX(0); }
+  94%           { transform: translateX(-1.5px); }
+  96%           { transform: translateX(1.5px); }
+  98%           { transform: translateX(-1px); }
+}
+
+/* Speech bubble on busy agents fades in */
+.iso-bubble { animation: iso-bubble-in .3s ease both; }
+@keyframes iso-bubble-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Error badge gets a gentle bounce */
+.iso-error-badge { animation: iso-error-bounce .6s ease-in-out infinite alternate; }
+@keyframes iso-error-bounce {
+  from { transform: translateY(0); }
+  to   { transform: translateY(-3px); }
+}
+
+/* Floor connection paths */
+.iso-link-line {
+  stroke: rgba(88,166,255,0.28);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 5;
   stroke-linecap: round;
+  fill: none;
 }
-
-.hex-conn-active {
-  stroke: rgba(88,166,255,.95);
-  stroke-width: 2.2;
+.iso-link--active .iso-link-line {
+  stroke: rgba(88,166,255,0.85);
+  stroke-width: 2;
 }
-
-.hex-conn-dot { fill: #58a6ff; filter: url(#glow); }
-
-/* --- Hex node (each agent) --- */
-.hex-node {
-  position: absolute;
-  transform: translate(-50%, -50%);
-  z-index: 10;
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  transition: transform .25s ease;
-}
-
-.hex-node:hover { transform: translate(-50%, -50%) scale(1.12); z-index: 20; }
-
-/* Glow ring behind the node */
-.hex-node-glow {
-  position: absolute;
-  width: 110px; height: 110px;
-  top: 50%; left: 50%;
-  transform: translate(-50%, -60%);
-  border-radius: 50%;
-  background: radial-gradient(circle, var(--node-color) 0%, transparent 70%);
-  opacity: .1;
-  pointer-events: none;
-  transition: opacity .3s;
-}
-
-.hex-node:hover .hex-node-glow { opacity: .25; }
-.hex-node--busy .hex-node-glow { opacity: .2; animation: node-pulse 2s ease infinite; }
-.hex-node--error .hex-node-glow { opacity: .15; background: radial-gradient(circle, var(--danger) 0%, transparent 70%); }
-
-@keyframes node-pulse {
-  0%,100% { opacity: .2; transform: translate(-50%,-60%) scale(1); }
-  50% { opacity: .35; transform: translate(-50%,-60%) scale(1.1); }
-}
-
-/* Hex body — the main visual element.
-   Fully opaque so it cleanly masks any connection line that would pass through it:
-   lines are drawn center-to-center in the SVG, and the body hides the portion
-   inside its bounds so the visible line terminates exactly at the body edge. */
-.hex-node-body {
-  width: 76px; height: 76px;
-  background: linear-gradient(145deg, #161b22, #0e1218);
-  border: 2px solid;
-  border-color: color-mix(in srgb, var(--node-color) 30%, transparent);
-  border-radius: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  box-shadow:
-    0 4px 20px rgba(0,0,0,.6),
-    inset 0 1px 0 rgba(255,255,255,.05),
-    0 0 20px color-mix(in srgb, var(--node-color) 8%, transparent);
-  transition: border-color .2s, box-shadow .2s;
-}
-
-.hex-node:hover .hex-node-body {
-  border-color: color-mix(in srgb, var(--node-color) 60%, transparent);
-  box-shadow:
-    0 4px 20px rgba(0,0,0,.6),
-    inset 0 1px 0 rgba(255,255,255,.05),
-    0 0 30px color-mix(in srgb, var(--node-color) 15%, transparent);
-}
-
-.hex-node--busy .hex-node-body {
-  border-color: color-mix(in srgb, var(--node-color) 50%, transparent);
-  box-shadow:
-    0 4px 20px rgba(0,0,0,.5),
-    0 0 25px color-mix(in srgb, var(--node-color) 15%, transparent);
-}
-
-.hex-node--center .hex-node-body {
-  width: 88px; height: 88px;
-  border-radius: 24px;
-  border-width: 2.5px;
-}
-
-.hex-node-icon { font-size: 28px; filter: drop-shadow(0 2px 4px rgba(0,0,0,.4)); }
-.hex-node--center .hex-node-icon { font-size: 34px; }
-
-/* Status dot */
-.hex-node-status {
-  position: absolute;
-  bottom: -2px; right: -2px;
-  width: 14px; height: 14px;
-  border-radius: 50%;
-  border: 2.5px solid #0a0c14;
-}
-
-.hex-node-status--idle { background: var(--success); box-shadow: 0 0 6px var(--success); }
-.hex-node-status--busy { background: var(--accent); box-shadow: 0 0 6px var(--accent); animation: status-blink 1.5s ease infinite; }
-.hex-node-status--error { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
-
-@keyframes status-blink { 0%,100%{opacity:1} 50%{opacity:.4} }
-
-/* Label */
-.hex-node-label {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  margin-top: 8px;
-  pointer-events: none;
-}
-
-.hex-node-name {
-  font-size: 13px;
-  font-weight: 800;
-  letter-spacing: .3px;
-  /* Tight shadow so it doesn't bleed into and obscure adjacent connection lines */
-  text-shadow: 0 1px 2px rgba(0,0,0,.9);
-}
-
-.hex-node-role {
-  font-size: 10px;
-  color: var(--text-muted);
-  text-shadow: 0 1px 2px rgba(0,0,0,.7);
-}
-
-/* Speech bubble — positioned above the node body.
-   In the horizontal layout, connection lines are mostly horizontal along the
-   spine, so a bubble *above* a busy node doesn't cover any line. */
-.hex-speech {
-  position: absolute;
-  bottom: calc(100% + 10px);    /* 10px gap above the node container */
-  left: 50%;
-  transform: translateX(-50%);
-  background: rgba(10,12,20,.92);
-  backdrop-filter: blur(8px);
-  border: 1px solid;
-  border-radius: 8px;
-  padding: 4px 10px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-primary);
-  white-space: nowrap;
-  z-index: 30;
-  pointer-events: none;
-  animation: hex-bubble .3s ease;
-  box-shadow: 0 4px 16px rgba(0,0,0,.5);
-}
-
-@keyframes hex-bubble {
-  from { opacity: 0; transform: translate(-50%, 6px); }
-  to   { opacity: 1; transform: translate(-50%, 0); }
-}
-
-/* Error badge */
-.hex-error-badge {
-  position: absolute;
-  top: -6px; right: -6px;
-  width: 20px; height: 20px;
-  background: var(--danger);
-  color: #fff;
-  font-size: 13px; font-weight: 900;
-  line-height: 20px;
-  text-align: center;
-  border-radius: 50%;
-  z-index: 25;
-  animation: error-bounce .5s ease infinite alternate;
-  box-shadow: 0 0 10px var(--danger);
-}
-
-@keyframes error-bounce { from{transform:translateY(0)} to{transform:translateY(-4px)} }
-
-/* Pipeline stage labels rendered as SVG text */
-.hex-stage-text {
-  font-family: inherit;
-  font-size: 22px;
-  font-weight: 800;
-  letter-spacing: 3px;
-  fill: rgba(88,166,255,.13);
-  text-transform: uppercase;
-  user-select: none;
+.iso-link-dot {
+  fill: #58a6ff;
+  filter: drop-shadow(0 0 4px rgba(88,166,255,0.9));
 }
 
 /* ==========================================================================
