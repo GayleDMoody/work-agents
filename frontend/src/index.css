@@ -1027,6 +1027,59 @@ tr:hover td { background: var(--bg-hover); }
   width: min(100cqw, 200cqh);
   max-width: 100%;
   max-height: 100%;
+  transform-origin: center center;
+  transition: transform .15s ease-out;
+  will-change: transform;
+}
+
+/* Zoom controls — top-right of the viewport, stacked pill */
+.iso-zoom-controls {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: rgba(8,10,16,0.82);
+  backdrop-filter: blur(16px) saturate(1.4);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 10px;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+
+.iso-zoom-btn {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  transition: background .15s, color .15s;
+}
+
+.iso-zoom-btn:hover:not(:disabled) {
+  background: rgba(88,166,255,0.14);
+  color: var(--accent);
+}
+
+.iso-zoom-btn:disabled {
+  opacity: .35;
+  cursor: not-allowed;
+}
+
+.iso-zoom-reset {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.5px;
 }
 
 /* Isometric office SVG fills the stage */
@@ -1097,6 +1150,18 @@ tr:hover td { background: var(--bg-hover); }
 @keyframes iso-error-bounce {
   from { transform: translateY(0); }
   to   { transform: translateY(-3px); }
+}
+
+/* Central hub — gentle pulse on the orb */
+.iso-hub-glow { animation: iso-hub-glow 3s ease-in-out infinite; transform-origin: center; transform-box: fill-box; }
+.iso-hub-core { animation: iso-hub-core 3s ease-in-out infinite; }
+@keyframes iso-hub-glow {
+  0%, 100% { opacity: .18; }
+  50%      { opacity: .35; }
+}
+@keyframes iso-hub-core {
+  0%, 100% { opacity: .85; }
+  50%      { opacity: 1;   }
 }
 
 /* Floor connection paths */

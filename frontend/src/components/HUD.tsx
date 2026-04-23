@@ -16,11 +16,27 @@ export default function HUD({ data, onTrigger }: Props) {
     setTicketKey('');
   };
 
-  // Build event ticker from recent runs
-  const events = data.recent_runs.flatMap(run => {
+  // Build event ticker from recent runs, falling back to a status summary
+  // when there's nothing to show so the bar never sits empty.
+  const runEvents = data.recent_runs.flatMap(run => {
     const statusEmoji = run.status === 'completed' ? '✅' : run.status === 'running' ? '⚡' : '❌';
     return [`${statusEmoji} ${run.ticket_key} — ${run.current_phase} (${run.agents_used.length} agents, $${run.total_cost.toFixed(2)})`];
   });
+
+  const anyServiceConnected = Object.values(data.services).some(s => s?.connected);
+  const connectedCount = Object.values(data.services).filter(s => s?.connected).length;
+  const totalServices = Object.keys(data.services).length;
+
+  const idleSummary = [
+    anyServiceConnected
+      ? `🟢 System ready — ${connectedCount}/${totalServices} services connected`
+      : `🔴 Backend offline — start the API (uvicorn src.api.app:app) to run pipelines`,
+    `🤖 ${data.busy_agents + data.idle_agents} agents available · ${data.busy_agents} busy · ${data.idle_agents} idle`,
+    `💬 Tip: enter a JIRA ticket key above and click Deploy to kick off a pipeline`,
+    `📊 Lifetime: ${data.completed_pipelines} completed · ${data.failed_pipelines} failed · $${data.total_cost.toFixed(2)} spent`,
+  ];
+
+  const events = runEvents.length > 0 ? runEvents : idleSummary;
 
   return (
     <>

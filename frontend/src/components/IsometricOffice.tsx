@@ -1,3 +1,5 @@
+import { useState, useCallback } from 'react';
+import { ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 import type { Agent } from '../types';
 
 /**
@@ -81,19 +83,38 @@ function isoBox(cx: number, cy: number, cz: number, w: number, d: number, h: num
   };
 }
 
-// Workstation world positions — 4 columns × 2 rows, pipeline-ordered
-const WORKSTATIONS: { id: string; wx: number; wy: number }[] = [
-  // Back row (farther from camera): planners / quality gate
-  { id: 'product',     wx: 3,  wy: 2 },
-  { id: 'pm',          wx: 7,  wy: 2 },
-  { id: 'architect',   wx: 11, wy: 2 },
-  { id: 'code_review', wx: 15, wy: 2 },
-  // Front row (closer to camera): implementers + QA
-  { id: 'frontend',    wx: 3,  wy: 6 },
-  { id: 'backend',     wx: 7,  wy: 6 },
-  { id: 'devops',      wx: 11, wy: 6 },
-  { id: 'qa',          wx: 15, wy: 6 },
+// Circular arrangement — 8 agents on a ring around a central hub.
+// Pipeline order goes clockwise from the top so the visual flow matches
+// the execution sequence: Product (top) → PM → Architect → Frontend → Backend →
+// DevOps → QA → Code Review, back around to Product.
+const HUB_X = 10;
+const HUB_Y = 4.5;
+const RING_R = 4;
+const RING_ORDER = [
+  'product',     // 90° (top)
+  'pm',          // 45° (top-right)
+  'architect',   // 0°  (right)
+  'frontend',    // -45°
+  'backend',     // -90° (bottom)
+  'devops',      // -135°
+  'qa',          // 180° (left)
+  'code_review', // 135° (top-left)
 ];
+
+const WORKSTATIONS: { id: string; wx: number; wy: number }[] = RING_ORDER.map((id, i) => {
+  // In iso-2:1 projection, the world-top of the circle appears at SCREEN top-right,
+  // not screen-top. Starting at θ=135° (world top-left) puts Product at the visual
+  // top of the screen, so the pipeline reads clockwise from the top.
+  const angleDeg = 135 - i * 45;
+  const rad = (angleDeg * Math.PI) / 180;
+  return {
+    id,
+    wx: HUB_X + RING_R * Math.cos(rad),
+    // Screen/world y flips: positive sin is "up" in math, but we want smaller wy
+    // for the top of the circle (i.e. farther from camera), so subtract.
+    wy: HUB_Y - RING_R * Math.sin(rad),
+  };
+});
 
 const CONNECTIONS: [string, string][] = [
   ['product',   'pm'],
@@ -106,28 +127,35 @@ const CONNECTIONS: [string, string][] = [
   ['qa',        'code_review'],
 ];
 
-// Desk + monitor dimensions in world units
-const DESK_W = 2.6;
-const DESK_D = 1.6;
-const DESK_H = 0.55;
+// Desk + monitor dimensions in world units.
+// Smaller than the previous grid layout so 8 desks fit around a radius-4 ring
+// without visual collision. The smaller desks also give the central hub room
+// to breathe.
+const DESK_W = 1.9;
+const DESK_D = 1.15;
+const DESK_H = 0.5;
 
-const MON_W = 1.5;
-const MON_D = 0.15;
-const MON_H = 1.0;
+const MON_W = 1.1;
+const MON_D = 0.12;
+const MON_H = 0.8;
 /** Monitor sits toward the back of the desk (from the user's POV) — i.e. toward
  *  -y in world coords, so the screen face points +y toward the camera. */
-const MON_Y_OFFSET = -0.35;
+const MON_Y_OFFSET = -0.26;
 
 // Chair sits on the +y side of the desk (closer to camera)
-const CHAIR_W = 0.8;
-const CHAIR_D = 0.8;
-const CHAIR_H = 0.95;
-const CHAIR_Y_OFFSET = 1.15;
+const CHAIR_W = 0.55;
+const CHAIR_D = 0.55;
+const CHAIR_H = 0.7;
+const CHAIR_Y_OFFSET = 0.82;
 
 interface Props {
   agents: Agent[];
   onAgentClick?: (agentId: string) => void;
 }
+
+const ZOOM_MIN = 0.6;
+const ZOOM_MAX = 2.4;
+const ZOOM_STEP = 0.15;
 
 export default function IsometricOffice({ agents, onAgentClick }: Props) {
   const agentMap = new Map(agents.map(a => [a.id, a]));
@@ -137,9 +165,38 @@ export default function IsometricOffice({ agents, onAgentClick }: Props) {
   // In iso, "nearer the camera" = larger (wx + wy).
   const paintOrdered = [...WORKSTATIONS].sort((a, b) => (a.wx + a.wy) - (b.wx + b.wy));
 
+  // Zoom state — applied as a CSS transform on the stage. Clamped to a sensible range.
+  const [zoom, setZoom] = useState(1);
+  const zoomIn    = useCallback(() => setZoom(z => Math.min(ZOOM_MAX, +(z + ZOOM_STEP).toFixed(2))), []);
+  const zoomOut   = useCallback(() => setZoom(z => Math.max(ZOOM_MIN, +(z - ZOOM_STEP).toFixed(2))), []);
+  const zoomReset = useCallback(() => setZoom(1), []);
+
+  // Mouse-wheel zoom: scroll up zooms in, scroll down zooms out.
+  const handleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    if (e.ctrlKey || e.metaKey) return; // let the browser handle page zoom
+    e.preventDefault();
+    const delta = -e.deltaY * 0.0015;
+    setZoom(z => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, +(z + delta).toFixed(3))));
+  }, []);
+
   return (
-    <div className="hex-office-viewport">
-      <div className="hex-office-stage">
+    <div className="hex-office-viewport" onWheel={handleWheel}>
+      <div className="iso-zoom-controls" aria-label="Zoom controls">
+        <button type="button" className="iso-zoom-btn" onClick={zoomIn}
+          disabled={zoom >= ZOOM_MAX} aria-label="Zoom in">
+          <ZoomIn size={14} />
+        </button>
+        <button type="button" className="iso-zoom-btn iso-zoom-reset" onClick={zoomReset}
+          aria-label="Reset zoom" title="Reset zoom">
+          <span>{Math.round(zoom * 100)}%</span>
+          <Maximize2 size={11} style={{ marginLeft: 4, opacity: 0.6 }} />
+        </button>
+        <button type="button" className="iso-zoom-btn" onClick={zoomOut}
+          disabled={zoom <= ZOOM_MIN} aria-label="Zoom out">
+          <ZoomOut size={14} />
+        </button>
+      </div>
+      <div className="hex-office-stage" style={{ transform: `scale(${zoom})` }}>
         <svg
           className="iso-office-svg"
           viewBox={`0 0 ${SVG_W} ${SVG_H}`}
@@ -169,7 +226,7 @@ export default function IsometricOffice({ agents, onAgentClick }: Props) {
           </defs>
 
           <Floor />
-          <FloorGrid />
+          <Hub />
 
           {/* Connections render below the desks (on the floor) */}
           <g className="iso-connections">
@@ -210,48 +267,99 @@ export default function IsometricOffice({ agents, onAgentClick }: Props) {
   );
 }
 
-/** Large floor plane — a parallelogram in iso view */
+// Floor extent — larger than the desk cluster so the office feels roomy.
+// Corners that fall outside the 1000×500 viewBox are clipped by the stage,
+// which creates a natural "floor continues off-camera" feel.
+const FLOOR_X0 = -2;
+const FLOOR_X1 = 20;
+const FLOOR_Y0 = -0.5;
+const FLOOR_Y1 = 8.5;
+
+/** Large floor plane with diamond tile pattern — a parallelogram in iso view. */
 function Floor() {
-  const fx0 = 0, fx1 = 18;
-  const fy0 = 0, fy1 = 8;
-  const c1 = iso(fx0, fy0);
-  const c2 = iso(fx1, fy0);
-  const c3 = iso(fx1, fy1);
-  const c4 = iso(fx0, fy1);
+  const c1 = iso(FLOOR_X0, FLOOR_Y0);
+  const c2 = iso(FLOOR_X1, FLOOR_Y0);
+  const c3 = iso(FLOOR_X1, FLOOR_Y1);
+  const c4 = iso(FLOOR_X0, FLOOR_Y1);
   const d = ptsToPath([c1, c2, c3, c4]);
+
+  // 2×2 world-unit tiles alternating between two subtle shades
+  const tiles: React.ReactNode[] = [];
+  const TILE = 2;
+  for (let y = FLOOR_Y0; y < FLOOR_Y1; y += TILE) {
+    for (let x = FLOOR_X0; x < FLOOR_X1; x += TILE) {
+      const tc1 = iso(x, y);
+      const tc2 = iso(x + TILE, y);
+      const tc3 = iso(x + TILE, y + TILE);
+      const tc4 = iso(x, y + TILE);
+      const tileD = ptsToPath([tc1, tc2, tc3, tc4]);
+      const ix = Math.round((x - FLOOR_X0) / TILE);
+      const iy = Math.round((y - FLOOR_Y0) / TILE);
+      const isDark = (ix + iy) % 2 === 0;
+      tiles.push(
+        <path
+          key={`tile-${ix}-${iy}`}
+          d={tileD}
+          fill={isDark ? 'rgba(255,255,255,0.020)' : 'rgba(255,255,255,0.055)'}
+          stroke="rgba(88,166,255,0.08)"
+          strokeWidth="0.6"
+        />,
+      );
+    }
+  }
+
   return (
     <g className="iso-floor">
-      <path d={d} fill="url(#floor-grad)" opacity="0.9" />
-      {/* Subtle perimeter accent */}
-      <path d={d} fill="none" stroke="rgba(88,166,255,0.12)" strokeWidth="1" />
+      <path d={d} fill="url(#floor-grad)" opacity="0.95" />
+      {tiles}
+      {/* Perimeter accent — slightly brighter so the floor edge reads */}
+      <path d={d} fill="none" stroke="rgba(88,166,255,0.22)" strokeWidth="1.2" />
     </g>
   );
 }
 
-/** Grid lines on the floor — subtle, decorative */
-function FloorGrid() {
-  const lines: React.ReactNode[] = [];
-  const fx0 = 0, fx1 = 18;
-  const fy0 = 0, fy1 = 8;
-  // Lines along x axis (parallel to x, at constant y)
-  for (let y = fy0; y <= fy1; y += 2) {
-    const [ax, ay] = iso(fx0, y);
-    const [bx, by] = iso(fx1, y);
-    lines.push(
-      <line key={`gx${y}`} x1={ax} y1={ay} x2={bx} y2={by}
-        stroke="rgba(88,166,255,0.06)" strokeWidth="0.8" strokeDasharray="4 4" />,
-    );
+/** Central hub — a low hexagonal platform with a glowing orb hovering above it.
+ *  This is the visual "anchor" of the circular layout; every desk faces it. */
+function Hub() {
+  const HUB_R = 1.2;
+  const HUB_PLATFORM_H = 0.18;
+  // Hexagon points in world coords
+  const hexPts: [number, number][] = [];
+  for (let i = 0; i < 6; i++) {
+    const a = (i * 60 - 30) * Math.PI / 180;
+    hexPts.push([HUB_X + HUB_R * Math.cos(a), HUB_Y + HUB_R * Math.sin(a)]);
   }
-  // Lines along y axis (parallel to y, at constant x)
-  for (let x = fx0; x <= fx1; x += 2) {
-    const [ax, ay] = iso(x, fy0);
-    const [bx, by] = iso(x, fy1);
-    lines.push(
-      <line key={`gy${x}`} x1={ax} y1={ay} x2={bx} y2={by}
-        stroke="rgba(88,166,255,0.06)" strokeWidth="0.8" strokeDasharray="4 4" />,
-    );
+  // Top face of platform
+  const topPts = hexPts.map(([x, y]) => iso(x, y, HUB_PLATFORM_H));
+  // Bottom face (for side strips)
+  const botPts = hexPts.map(([x, y]) => iso(x, y, 0));
+  // Side faces — build a path combining top and bottom edges for each visible side
+  const sidePaths: string[] = [];
+  for (let i = 0; i < 6; i++) {
+    const j = (i + 1) % 6;
+    sidePaths.push(ptsToPath([botPts[i], botPts[j], topPts[j], topPts[i]]));
   }
-  return <g className="iso-floor-grid">{lines}</g>;
+  // Orb positions
+  const [orbCx, orbCy] = iso(HUB_X, HUB_Y, HUB_PLATFORM_H + 0.9);
+  const [glowCx, glowCy] = iso(HUB_X, HUB_Y, 0);
+
+  return (
+    <g className="iso-hub" pointerEvents="none">
+      {/* Soft glow on the floor beneath the hub */}
+      <ellipse cx={glowCx} cy={glowCy + 8} rx={HUB_R * ISO_SX * 1.2} ry={HUB_R * ISO_SY * 1.5}
+        fill="#58a6ff" opacity="0.22" filter="url(#glow-soft)" />
+      {/* Platform sides (all rendered; the ones facing away will be occluded visually) */}
+      {sidePaths.map((d, i) => (
+        <path key={i} d={d} fill="#1a1f2a" stroke="rgba(88,166,255,0.25)" strokeWidth="0.5" />
+      ))}
+      {/* Platform top */}
+      <path d={ptsToPath(topPts)} fill="#232a3a" stroke="rgba(88,166,255,0.5)" strokeWidth="1" />
+      {/* Hub orb */}
+      <circle cx={orbCx} cy={orbCy} r="14" fill="#58a6ff" opacity="0.18" className="iso-hub-glow" />
+      <circle cx={orbCx} cy={orbCy} r="8"  fill="#58a6ff" opacity="0.45" className="iso-hub-core" />
+      <circle cx={orbCx} cy={orbCy} r="4"  fill="#cfe4ff" opacity="0.9"  className="iso-hub-core" />
+    </g>
+  );
 }
 
 /** Dashed glowing line on the floor between two workstations + animated dot when active */
