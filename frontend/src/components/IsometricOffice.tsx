@@ -34,17 +34,14 @@ const AGENT_VISUALS: Record<string, { color: string; label: string; busyText: st
 const SVG_W = 1000;
 const SVG_H = 500;
 
-// Iso projection — scale + offset tuned so the 8-desk scene fills 1000×500
-// with tight margins (no stage labels taking space above).
-//
-// Horizontal iso span ≈ (wx_max - wy_min + wy_max - wx_min) * ISO_SX
-//   = (16.3 - 1.2 + 6.8 - 1.7) * 42 ≈ 848 → ~76 margin each side in 1000 wide.
-// Vertical   iso span ≈ (wx_max + wy_max) * ISO_SY - (top of monitor) ≈ 489.
-//   ISO_SY = ISO_SX / 2 keeps the pixel-art 2:1 dimetric aspect.
+// Iso projection — scale + offset tuned to centre the circular scene in 1000×500.
+// HUB world position (10, 4.5) should map to SVG centre (500, 250):
+//   iso_x of hub centre = (10 - 4.5) * 42 = 231, so OFFSET_X = 500 - 231 = 269.
+//   iso_y of hub centre = (10 + 4.5) * 21 = 304.5, so OFFSET_Y = 250 - 304.5 = -54.5.
 const ISO_SX = 42;
 const ISO_SY = 21;
-const OFFSET_X = 290;
-const OFFSET_Y = 10;
+const OFFSET_X = 269;
+const OFFSET_Y = -55;
 
 function iso(wx: number, wy: number, wz: number = 0): [number, number] {
   return [
@@ -267,39 +264,40 @@ export default function IsometricOffice({ agents, onAgentClick }: Props) {
   );
 }
 
-// Floor extent. Dimensions chosen so every axis divides cleanly by the tile
-// size (TILE=2) — span x = 22 = 11 tiles, span y = 10 = 5 tiles. No tile
-// bleeds past the floor and every desk sits fully on it (Backend at wy=8.5
-// has its front at wy~9.08 which fits inside FLOOR_Y1=9.5).
-const FLOOR_X0 = -2;
-const FLOOR_X1 = 20;
-const FLOOR_Y0 = -0.5;
-const FLOOR_Y1 = 9.5;
+// Circular floor radius in world units. Agents sit on a radius-4 ring, desks
+// extend ~1 unit beyond their centre, so a radius-7 floor leaves ~2 units of
+// margin outside every desk — enough room for the scene to breathe without
+// over-filling the viewBox.
+const FLOOR_R = 7;
 const TILE = 2;
 
-/** Large floor plane with diamond tile pattern — a parallelogram in iso view. */
+/** Circular floor platform — a world-space circle that projects to an ellipse
+ *  in iso-2:1. Tiled interior clipped to the circle shape, with a subtle edge
+ *  stroke defining the platform boundary. */
 function Floor() {
-  const c1 = iso(FLOOR_X0, FLOOR_Y0);
-  const c2 = iso(FLOOR_X1, FLOOR_Y0);
-  const c3 = iso(FLOOR_X1, FLOOR_Y1);
-  const c4 = iso(FLOOR_X0, FLOOR_Y1);
-  const d = ptsToPath([c1, c2, c3, c4]);
+  // Approximate the world-space circle as a smooth 64-segment polygon.
+  const N = 64;
+  const edge: [number, number][] = [];
+  for (let i = 0; i < N; i++) {
+    const a = (i / N) * 2 * Math.PI;
+    edge.push(iso(HUB_X + FLOOR_R * Math.cos(a), HUB_Y + FLOOR_R * Math.sin(a)));
+  }
+  const d = ptsToPath(edge);
 
-  // Unique clip-path id per mount in case multiple offices ever share the page.
-  const clipId = 'iso-floor-clip';
-
-  // 2×2 world-unit tiles alternating between two subtle shades.
-  // Tiles are clipped to the floor shape so they never extend past the edge.
+  // Tile grid over the bounding square, clipped to the circle shape below.
   const tiles: React.ReactNode[] = [];
-  for (let y = FLOOR_Y0; y < FLOOR_Y1; y += TILE) {
-    for (let x = FLOOR_X0; x < FLOOR_X1; x += TILE) {
+  const bound = Math.ceil(FLOOR_R + 1);
+  for (let dy = -bound; dy < bound; dy += TILE) {
+    for (let dx = -bound; dx < bound; dx += TILE) {
+      const x = HUB_X + dx;
+      const y = HUB_Y + dy;
       const tc1 = iso(x, y);
       const tc2 = iso(x + TILE, y);
       const tc3 = iso(x + TILE, y + TILE);
       const tc4 = iso(x, y + TILE);
       const tileD = ptsToPath([tc1, tc2, tc3, tc4]);
-      const ix = Math.round((x - FLOOR_X0) / TILE);
-      const iy = Math.round((y - FLOOR_Y0) / TILE);
+      const ix = Math.round((dx + bound) / TILE);
+      const iy = Math.round((dy + bound) / TILE);
       const isDark = (ix + iy) % 2 === 0;
       tiles.push(
         <path
@@ -316,14 +314,20 @@ function Floor() {
   return (
     <g className="iso-floor">
       <defs>
-        <clipPath id={clipId}>
+        <clipPath id="iso-floor-clip">
           <path d={d} />
         </clipPath>
+        {/* Soft radial gradient to brighten the centre and fade toward the edge */}
+        <radialGradient id="floor-radial" cx="50%" cy="50%" r="60%">
+          <stop offset="0%"  stopColor="#18202e" stopOpacity="1" />
+          <stop offset="60%" stopColor="#0c111b" stopOpacity="1" />
+          <stop offset="100%" stopColor="#060912" stopOpacity="1" />
+        </radialGradient>
       </defs>
-      <path d={d} fill="url(#floor-grad)" opacity="0.95" />
-      <g clipPath={`url(#${clipId})`}>{tiles}</g>
-      {/* No hard perimeter stroke — the tile grid already defines the floor edge,
-          and a bright outline cuts a distracting diagonal across the viewport. */}
+      <path d={d} fill="url(#floor-radial)" />
+      <g clipPath="url(#iso-floor-clip)">{tiles}</g>
+      {/* Subtle edge glow — defines the platform boundary without being harsh */}
+      <path d={d} fill="none" stroke="rgba(88,166,255,0.28)" strokeWidth="1.4" />
     </g>
   );
 }
