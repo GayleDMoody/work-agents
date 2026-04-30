@@ -87,6 +87,17 @@ export const api = {
       `/jira/ticket/${encodeURIComponent(ticketKey)}`,
     ),
 
+  // GitHub OAuth — same shape as Jira
+  githubOAuthStatus: () =>
+    fetchJSON<{ connected: boolean; user_login?: string; user_avatar?: string; scope?: string }>(
+      '/github/oauth/status',
+    ),
+
+  githubOAuthStartUrl: () => `${BASE_URL}/github/oauth/redirect`,
+
+  githubOAuthDisconnect: () =>
+    fetchJSON<{ status: string }>('/github/oauth/disconnect', { method: 'POST' }),
+
   // Agent live-thought feed
   getAgentThoughts: (agentId: string) =>
     fetchJSON<AgentThought[]>(`/agents/${encodeURIComponent(agentId)}/thoughts`),

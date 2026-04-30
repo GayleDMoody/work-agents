@@ -42,6 +42,11 @@ class GitHubSettings(BaseSettings):
     repo: str = ""
     base_branch: str = "main"
 
+    # OAuth 2.0 — register an app at https://github.com/settings/developers
+    oauth_client_id: str = ""
+    oauth_client_secret: str = ""
+    oauth_redirect_uri: str = "http://localhost:8000/api/github/oauth/callback"
+
 
 class PipelineSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="WORK_AGENTS_PIPELINE_")

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { CheckCircle, XCircle, Loader2, Search, X, ExternalLink, Puzzle, ChevronRight, Link as LinkIcon, Unlink } from 'lucide-react';
 import { api } from '../api/client';
 import ConnectorLogo from '../components/ConnectorLogos';
@@ -61,12 +61,11 @@ const PLUGINS: Plugin[] = [
   // Source Control
   {
     id: 'github', name: 'GitHub', category: 'source-control',
-    description: 'Create branches, commit code, open PRs, and post review comments. Full Git workflow automation.',
+    description: 'Create branches, commit code, open PRs, and post review comments. Uses GitHub OAuth so the agents act as you — no personal access tokens to manage.',
     icon: '⚫', color: '#8b949e', installed: false, connected: false,
-    fields: [
-      { key: 'token', label: 'Personal Access Token', type: 'password', placeholder: 'ghp_...' },
-      { key: 'repo', label: 'Repository', placeholder: 'owner/repo-name' },
-    ],
+    auth: 'oauth',
+    fields: [],
+    docsUrl: 'https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app',
   },
   {
     id: 'gitlab', name: 'GitLab', category: 'source-control',
@@ -221,19 +220,38 @@ function ConnectorModal({ plugin, onClose, onStatusChange }: {
   const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
   const [saved, setSaved] = useState(false);
 
-  // OAuth state for OAuth-based connectors (currently Jira)
+  // OAuth-based connectors (currently Jira and GitHub).
   const isOAuth = plugin.auth === 'oauth';
-  const [oauthStatus, setOAuthStatus] = useState<{ connected: boolean; site_url?: string; expires_in_seconds?: number } | null>(null);
+  const [oauthStatus, setOAuthStatus] = useState<
+    { connected: boolean; site_url?: string; expires_in_seconds?: number; user_login?: string; user_avatar?: string; scope?: string } | null
+  >(null);
   const [oauthLoading, setOAuthLoading] = useState(false);
 
-  // Poll OAuth status on mount + listen for the popup-postMessage so we can
-  // refresh as soon as the auth flow completes.
+  // Per-plugin OAuth method dispatch — keeps the modal generic.
+  const oauthApi = useMemo(() => {
+    if (plugin.id === 'jira') return {
+      status: api.jiraOAuthStatus,
+      startUrl: api.jiraOAuthStartUrl,
+      disconnect: api.jiraOAuthDisconnect,
+      messageType: 'jira-oauth' as const,
+      provider: 'Atlassian',
+    };
+    if (plugin.id === 'github') return {
+      status: api.githubOAuthStatus,
+      startUrl: api.githubOAuthStartUrl,
+      disconnect: api.githubOAuthDisconnect,
+      messageType: 'github-oauth' as const,
+      provider: 'GitHub',
+    };
+    return null;
+  }, [plugin.id]);
+
   useEffect(() => {
-    if (!isOAuth) return;
+    if (!isOAuth || !oauthApi) return;
     let mounted = true;
     const refresh = async () => {
       try {
-        const s = await api.jiraOAuthStatus();
+        const s = await oauthApi.status();
         if (mounted) {
           setOAuthStatus(s);
           onStatusChange?.();
@@ -242,31 +260,26 @@ function ConnectorModal({ plugin, onClose, onStatusChange }: {
     };
     refresh();
     const onMessage = (e: MessageEvent) => {
-      if (e.data?.type === 'jira-oauth') {
-        // Give the backend a moment to finish persisting tokens, then refresh
-        setTimeout(refresh, 400);
-      }
+      if (e.data?.type === oauthApi.messageType) setTimeout(refresh, 400);
     };
     window.addEventListener('message', onMessage);
     return () => { mounted = false; window.removeEventListener('message', onMessage); };
-  }, [isOAuth, onStatusChange]);
+  }, [isOAuth, oauthApi, onStatusChange]);
 
   const handleConnectOAuth = () => {
-    if (!isOAuth) return;
+    if (!oauthApi) return;
     setOAuthLoading(true);
-    const url = api.jiraOAuthStartUrl();
     const w = 600, h = 700;
     const left = window.screenX + (window.innerWidth - w) / 2;
     const top = window.screenY + (window.innerHeight - h) / 2;
-    window.open(url, 'jira-oauth', `width=${w},height=${h},left=${left},top=${top}`);
-    // Loading flag flips off when status posts back via postMessage
+    window.open(oauthApi.startUrl(), `${plugin.id}-oauth`, `width=${w},height=${h},left=${left},top=${top}`);
     setTimeout(() => setOAuthLoading(false), 30000);
   };
 
   const handleDisconnectOAuth = async () => {
-    if (!isOAuth) return;
+    if (!oauthApi) return;
     try {
-      await api.jiraOAuthDisconnect();
+      await oauthApi.disconnect();
       setOAuthStatus({ connected: false });
       onStatusChange?.();
     } catch { /* ignore */ }
@@ -317,8 +330,17 @@ function ConnectorModal({ plugin, onClose, onStatusChange }: {
                     <CheckCircle size={14} /> <strong>Connected</strong>
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                    Workspace: <code>{oauthStatus.site_url || '(unknown)'}</code>
+                    {oauthStatus.user_login ? (
+                      <>Signed in as <code>@{oauthStatus.user_login}</code></>
+                    ) : (
+                      <>Workspace: <code>{oauthStatus.site_url || '(unknown)'}</code></>
+                    )}
                   </div>
+                  {oauthStatus.scope && (
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                      Scopes: <code>{oauthStatus.scope}</code>
+                    </div>
+                  )}
                   {typeof oauthStatus.expires_in_seconds === 'number' && (
                     <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                       Token refreshes automatically. Current expiry: ~{Math.round(oauthStatus.expires_in_seconds / 60)} min.
@@ -328,12 +350,16 @@ function ConnectorModal({ plugin, onClose, onStatusChange }: {
               ) : (
                 <div className="alert" style={{ background: 'rgba(88,166,255,0.06)', borderColor: 'rgba(88,166,255,0.18)', color: 'var(--text-secondary)' }}>
                   <div style={{ fontSize: 12, lineHeight: 1.6 }}>
-                    Click <strong>Connect with Atlassian</strong> below. A popup will open the
-                    Atlassian sign-in flow (corporate SSO supported). After you approve the
-                    requested scopes, the popup closes automatically and this card switches
-                    to <em>Connected</em>.
-                    <br /><br />
-                    <strong>Required scopes:</strong> <code>read:jira-work</code>, <code>read:jira-user</code>, <code>offline_access</code>.
+                    Click <strong>Connect with {oauthApi?.provider || 'OAuth'}</strong> below. A popup
+                    will open the sign-in flow {plugin.id === 'jira' ? '(corporate SSO supported)' : ''}.
+                    After you approve the requested scopes, the popup closes automatically
+                    and this card switches to <em>Connected</em>.
+                    {plugin.id === 'jira' && (
+                      <><br /><br /><strong>Required scopes:</strong> <code>read:jira-work</code>, <code>read:jira-user</code>, <code>offline_access</code>.</>
+                    )}
+                    {plugin.id === 'github' && (
+                      <><br /><br /><strong>Required scopes:</strong> <code>repo</code>, <code>read:user</code>.</>
+                    )}
                   </div>
                 </div>
               )}
@@ -381,7 +407,7 @@ function ConnectorModal({ plugin, onClose, onStatusChange }: {
               </button>
             ) : (
               <button className="btn btn-primary" onClick={handleConnectOAuth} disabled={oauthLoading}>
-                {oauthLoading ? <><Loader2 size={14} className="spin" /> Waiting for auth…</> : <><LinkIcon size={14} /> Connect with Atlassian</>}
+                {oauthLoading ? <><Loader2 size={14} className="spin" /> Waiting for auth…</> : <><LinkIcon size={14} /> Connect with {oauthApi?.provider || 'OAuth'}</>}
               </button>
             )
           ) : (
@@ -431,13 +457,20 @@ export default function SettingsPage() {
       // play it includes the site URL, which is more useful for display.
       merged.jira = { connected: j.connected, detail: j.site_url };
     } catch { /* ignore */ }
+    try {
+      const g = await api.githubOAuthStatus();
+      // Same pattern for GitHub.
+      if (g.connected) merged.github = { connected: true, detail: g.user_login ? `@${g.user_login}` : '' };
+    } catch { /* ignore */ }
     setLiveStatus(merged);
   };
 
   useEffect(() => {
     refreshLiveStatus();
     const onMessage = (e: MessageEvent) => {
-      if (e.data?.type === 'jira-oauth') setTimeout(refreshLiveStatus, 400);
+      if (e.data?.type === 'jira-oauth' || e.data?.type === 'github-oauth') {
+        setTimeout(refreshLiveStatus, 400);
+      }
     };
     window.addEventListener('message', onMessage);
     // Refresh every 5s while on the page so test-connection / disconnect

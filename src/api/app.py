@@ -76,8 +76,16 @@ def _autodetect_connections() -> None:
             connected_services["jira"]["server_url"] = s.jira.server_url
             connected_services["jira"]["email"] = s.jira.email
 
-        # GitHub — token present in env?
-        if s.github.token:
+        # GitHub — OAuth tokens persisted on disk OR a personal access token in env
+        try:
+            from src.integrations.github_oauth import is_connected as gh_oauth_is_connected, get_tokens as gh_oauth_tokens
+            if gh_oauth_is_connected():
+                t = gh_oauth_tokens()
+                connected_services["github"]["connected"] = True
+                connected_services["github"]["repo"] = f"@{t.user_login}" if t else ""
+        except Exception:
+            pass
+        if not connected_services["github"]["connected"] and s.github.token:
             connected_services["github"]["connected"] = True
             connected_services["github"]["repo"] = s.github.repo
     except Exception as e:
@@ -952,6 +960,90 @@ async def jira_oauth_disconnect():
     return {"status": "disconnected"}
 
 
+# ---------------------------------------------------------------------------
+# GitHub OAuth 2.0 flow (same shape as Jira)
+# ---------------------------------------------------------------------------
+
+def _github_oauth_config():
+    from src.integrations.github_oauth import GitHubOAuthConfig
+    from src.settings import Settings
+    s = Settings()
+    if not (s.github.oauth_client_id and s.github.oauth_client_secret):
+        raise HTTPException(
+            status_code=400,
+            detail="GitHub OAuth not configured. Set WORK_AGENTS_GITHUB_OAUTH_CLIENT_ID and "
+                   "WORK_AGENTS_GITHUB_OAUTH_CLIENT_SECRET in .env, then restart.",
+        )
+    return GitHubOAuthConfig(
+        client_id=s.github.oauth_client_id,
+        client_secret=s.github.oauth_client_secret,
+        redirect_uri=s.github.oauth_redirect_uri,
+    )
+
+
+@app.get("/api/github/oauth/start")
+async def github_oauth_start():
+    from src.integrations.github_oauth import build_authorize_url
+    cfg = _github_oauth_config()
+    url, _ = build_authorize_url(cfg)
+    return {"authorize_url": url}
+
+
+@app.get("/api/github/oauth/redirect")
+async def github_oauth_redirect():
+    from src.integrations.github_oauth import build_authorize_url
+    cfg = _github_oauth_config()
+    url, _ = build_authorize_url(cfg)
+    return RedirectResponse(url, status_code=302)
+
+
+@app.get("/api/github/oauth/callback", response_class=HTMLResponse)
+async def github_oauth_callback(code: str = "", state: str = "", error: str = ""):
+    if error:
+        return HTMLResponse(_oauth_result_html(False, f"GitHub returned error: {error}", service="GitHub"))
+    if not code or not state:
+        return HTMLResponse(_oauth_result_html(False, "Missing code or state in callback.", service="GitHub"))
+
+    from src.integrations.github_oauth import exchange_code_for_tokens
+    cfg = _github_oauth_config()
+    try:
+        tokens = await exchange_code_for_tokens(cfg, code, state)
+    except Exception as e:
+        log.error("github_oauth_callback_exchange_failed", error=str(e))
+        return HTMLResponse(_oauth_result_html(False, f"Token exchange failed: {str(e)[:160]}", service="GitHub"))
+
+    connected_services["github"]["connected"] = True
+    connected_services["github"]["repo"] = ""
+
+    return HTMLResponse(_oauth_result_html(
+        True,
+        f"Connected as @{tokens.user_login}. You can close this tab — the dashboard will pick it up automatically.",
+        service="GitHub",
+    ))
+
+
+@app.get("/api/github/oauth/status")
+async def github_oauth_status():
+    from src.integrations.github_oauth import get_tokens
+    t = get_tokens()
+    if not t:
+        return {"connected": False}
+    return {
+        "connected": True,
+        "user_login": t.user_login,
+        "user_avatar": t.user_avatar,
+        "scope": t.scope,
+    }
+
+
+@app.post("/api/github/oauth/disconnect")
+async def github_oauth_disconnect():
+    from src.integrations.github_oauth import disconnect
+    disconnect()
+    connected_services["github"]["connected"] = False
+    return {"status": "disconnected"}
+
+
 @app.get("/api/jira/ticket/{ticket_key}")
 async def jira_fetch_ticket(ticket_key: str):
     """Fetch a single Jira ticket using the configured auth (OAuth preferred,
@@ -971,10 +1063,10 @@ async def jira_fetch_ticket(ticket_key: str):
         return {"error": f"{type(e).__name__}: {str(e)[:200]}"}
 
 
-def _oauth_result_html(success: bool, message: str) -> str:
+def _oauth_result_html(success: bool, message: str, *, service: str = "Jira") -> str:
     color = "#3fb950" if success else "#f85149"
     icon = "✓" if success else "✗"
-    title = "Jira connected" if success else "Jira connection failed"
+    title = f"{service} connected" if success else f"{service} connection failed"
     return f"""<!doctype html>
 <html><head><title>{title}</title>
 <style>
@@ -997,7 +1089,7 @@ def _oauth_result_html(success: bool, message: str) -> str:
 </div>
 <script>
   // Notify the opener (the dashboard) that auth completed, then close.
-  try {{ window.opener && window.opener.postMessage({{type: 'jira-oauth', success: {str(success).lower()} }}, '*'); }} catch(e) {{}}
+  try {{ window.opener && window.opener.postMessage({{type: '{service.lower()}-oauth', success: {str(success).lower()} }}, '*'); }} catch(e) {{}}
   setTimeout(() => {{ try {{ window.close(); }} catch(e) {{}} }}, 2500);
 </script>
 </body></html>"""
