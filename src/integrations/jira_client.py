@@ -14,19 +14,57 @@ log = get_logger("jira_client")
 class JiraClient:
     """Async wrapper around the jira Python library."""
 
-    def __init__(self, server_url: str, email: str, api_token: str):
+    def __init__(
+        self,
+        server_url: str,
+        email: str,
+        api_token: str,
+        *,
+        verify_ssl: bool = True,
+        ca_bundle: str | None = None,
+    ):
+        """
+        Args:
+            server_url: e.g. https://yourorg.atlassian.net
+            email: account email tied to the API token
+            api_token: token from id.atlassian.com/manage-profile/security/api-tokens
+            verify_ssl: when False, skip TLS cert verification. Use only on
+                corporate networks doing TLS interception (Palo Alto, ZScaler, etc.)
+                where you trust the network. Default True.
+            ca_bundle: optional path to a custom CA bundle (preferred over
+                disabling verification on corp networks). When set, takes
+                precedence over verify_ssl=False.
+        """
         self.server_url = server_url
         self.email = email
         self.api_token = api_token
+        self.verify_ssl = verify_ssl
+        self.ca_bundle = ca_bundle
         self._jira = None
 
     def _get_client(self):
         if self._jira is None:
             from jira import JIRA
-            self._jira = JIRA(
-                server=self.server_url,
-                basic_auth=(self.email, self.api_token),
-            )
+            # The jira lib accepts a ``verify`` kwarg via options that controls the
+            # underlying requests Session. ca_bundle (if provided) wins over a plain
+            # bool — point it at the cert and we still get verification.
+            verify: bool | str
+            if self.ca_bundle:
+                verify = self.ca_bundle
+            else:
+                verify = self.verify_ssl
+            options = {"server": self.server_url, "verify": verify}
+            self._jira = JIRA(options=options, basic_auth=(self.email, self.api_token))
+            if not self.verify_ssl and not self.ca_bundle:
+                log.warning("jira_ssl_verification_disabled",
+                            server=self.server_url,
+                            note="trust_only_on_corporate_intercepting_proxies")
+                # Suppress the urllib3 InsecureRequestWarning so logs stay clean
+                try:
+                    import urllib3
+                    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+                except Exception:
+                    pass
         return self._jira
 
     async def fetch_ticket(self, ticket_key: str) -> dict[str, Any]:

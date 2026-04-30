@@ -22,6 +22,11 @@ class JiraSettings(BaseSettings):
     api_token: str = ""
     project_key: str = "PROJ"
     poll_interval_seconds: int = 60
+    # Set to False on corporate networks doing TLS interception
+    # (e.g. Palo Alto, ZScaler) where Python's requests can't validate the
+    # corporate-signed cert. Use ca_bundle instead when possible.
+    verify_ssl: bool = True
+    ca_bundle: str = ""
 
 
 class GitHubSettings(BaseSettings):

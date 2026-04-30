@@ -63,13 +63,19 @@ async def _resolve_ticket(ticket_key: str) -> dict[str, Any]:
         from src.integrations.jira_client import JiraClient
         s = Settings()
         if s.jira.server_url and s.jira.email and s.jira.api_token:
-            client = JiraClient(s.jira.server_url, s.jira.email, s.jira.api_token)
+            client = JiraClient(
+                s.jira.server_url,
+                s.jira.email,
+                s.jira.api_token,
+                verify_ssl=s.jira.verify_ssl,
+                ca_bundle=s.jira.ca_bundle or None,
+            )
             ticket = await client.fetch_ticket(ticket_key)
             if ticket:
                 log.info("ticket_fetched_from_jira", ticket_key=ticket_key)
                 return ticket
     except Exception as e:
-        log.warning("jira_fetch_failed", ticket_key=ticket_key, error=str(e)[:120])
+        log.warning("jira_fetch_failed", ticket_key=ticket_key, error=str(e)[:160])
 
     # Try a fixture by ticket key
     try:
