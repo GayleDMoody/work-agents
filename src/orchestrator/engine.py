@@ -57,14 +57,19 @@ class RunResult:
 async def _resolve_ticket(ticket_key: str) -> dict[str, Any]:
     """Fetch a ticket from Jira if creds are present; otherwise fall back to a
     fixture or a stub so demos work without a real Jira connection."""
-    # Try real Jira
+    # Try real Jira if all three credentials are configured
     try:
-        from src.integrations.jira_client import fetch_ticket  # type: ignore
-        ticket = await fetch_ticket(ticket_key)
-        if ticket:
-            return ticket
-    except Exception:
-        pass
+        from src.settings import Settings
+        from src.integrations.jira_client import JiraClient
+        s = Settings()
+        if s.jira.server_url and s.jira.email and s.jira.api_token:
+            client = JiraClient(s.jira.server_url, s.jira.email, s.jira.api_token)
+            ticket = await client.fetch_ticket(ticket_key)
+            if ticket:
+                log.info("ticket_fetched_from_jira", ticket_key=ticket_key)
+                return ticket
+    except Exception as e:
+        log.warning("jira_fetch_failed", ticket_key=ticket_key, error=str(e)[:120])
 
     # Try a fixture by ticket key
     try:
