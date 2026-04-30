@@ -95,7 +95,7 @@ const PLUGINS: Plugin[] = [
     icon: '🤖', color: '#D4A574', installed: false, connected: false,
     fields: [
       { key: 'api_key', label: 'API Key', type: 'password', placeholder: 'sk-ant-...' },
-      { key: 'model', label: 'Default Model', placeholder: 'claude-sonnet-4-20250514' },
+      { key: 'model', label: 'Default Model', placeholder: 'claude-haiku-4-5-20251001' },
     ],
   },
   {

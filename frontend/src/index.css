@@ -309,6 +309,27 @@ tr:hover td { background: var(--bg-hover); }
 
 .settings-select:focus { border-color: var(--accent); }
 
+.settings-secondary-btn {
+  appearance: none;
+  background: rgba(88, 166, 255, 0.08);
+  border: 1px solid rgba(88, 166, 255, 0.2);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.settings-secondary-btn:hover {
+  background: rgba(88, 166, 255, 0.16);
+  border-color: rgba(88, 166, 255, 0.36);
+}
+.settings-secondary-btn:active {
+  background: rgba(88, 166, 255, 0.22);
+}
+
 /* Toggle switch */
 .settings-toggle {
   width: 44px; height: 24px;

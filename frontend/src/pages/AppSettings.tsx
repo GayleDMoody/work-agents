@@ -40,7 +40,7 @@ interface AppConfig {
 
 const DEFAULT_CONFIG: AppConfig = {
   theme: 'dark',
-  defaultModel: 'claude-sonnet-4-20250514',
+  defaultModel: 'claude-haiku-4-5-20251001',
   verbose: false,
   processType: 'sequential',
   maxFeedbackLoops: 3,
@@ -64,12 +64,40 @@ const DEFAULT_CONFIG: AppConfig = {
   },
 };
 
-const MODELS = [
-  { value: '', label: 'Use default' },
-  { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
-  { value: 'claude-opus-4-20250514', label: 'Claude Opus 4' },
-  { value: 'claude-haiku-3-5-20241022', label: 'Claude Haiku 3.5' },
+/**
+ * Available Anthropic models. Tier and approximate $/Mtok input/output prices
+ * are shown in the picker so users can pick the right tradeoff per agent.
+ * Pricing as of 2026-04. Prices may change — these are display hints only.
+ */
+type ModelTier = 'haiku' | 'sonnet' | 'opus';
+interface ModelOption {
+  value: string;
+  label: string;
+  tier: ModelTier;
+  /** Rough $/Mtok input  */ priceIn?: number;
+  /** Rough $/Mtok output */ priceOut?: number;
+  /** True for the most-recommended pick at each tier */ recommended?: boolean;
+}
+
+const MODELS: ModelOption[] = [
+  { value: '',                              label: 'Use default',                tier: 'haiku' },
+  // Haiku — fastest + cheapest, great for high-volume agent calls
+  { value: 'claude-haiku-4-5-20251001',     label: 'Claude Haiku 4.5',           tier: 'haiku',  priceIn: 1.00,  priceOut: 5.00,  recommended: true },
+  // Sonnet — balanced reasoning + cost
+  { value: 'claude-sonnet-4-5-20250929',    label: 'Claude Sonnet 4.5',          tier: 'sonnet', priceIn: 3.00,  priceOut: 15.00, recommended: true },
+  { value: 'claude-sonnet-4-6',             label: 'Claude Sonnet 4.6',          tier: 'sonnet', priceIn: 3.00,  priceOut: 15.00 },
+  // Opus — strongest reasoning, most expensive
+  { value: 'claude-opus-4-1-20250805',      label: 'Claude Opus 4.1',            tier: 'opus',   priceIn: 15.00, priceOut: 75.00 },
+  { value: 'claude-opus-4-5-20251101',      label: 'Claude Opus 4.5',            tier: 'opus',   priceIn: 15.00, priceOut: 75.00 },
+  { value: 'claude-opus-4-6',               label: 'Claude Opus 4.6',            tier: 'opus',   priceIn: 15.00, priceOut: 75.00 },
+  { value: 'claude-opus-4-7',               label: 'Claude Opus 4.7',            tier: 'opus',   priceIn: 15.00, priceOut: 75.00, recommended: true },
 ];
+
+function modelLabel(value: string): string {
+  if (!value) return 'Use default';
+  const m = MODELS.find(x => x.value === value);
+  return m ? m.label : value;
+}
 
 const AGENTS = [
   { id: 'product', name: 'Product Analyst' },
@@ -81,6 +109,34 @@ const AGENTS = [
   { id: 'devops', name: 'DevOps' },
   { id: 'code_review', name: 'Code Reviewer' },
 ];
+
+/**
+ * Sensible per-role model defaults if the user clicks "Apply suggested".
+ *  - Reasoning-heavy roles (architect, code_review) → Opus
+ *  - Planning / synthesis roles (product, pm) → Sonnet
+ *  - High-volume execution roles (frontend, backend, qa, devops) → Haiku for cost
+ */
+const SUGGESTED_AGENT_MODELS: Record<string, string> = {
+  product:     'claude-sonnet-4-5-20250929',
+  pm:          'claude-sonnet-4-5-20250929',
+  architect:   'claude-opus-4-1-20250805',
+  frontend:    'claude-haiku-4-5-20251001',
+  backend:     'claude-haiku-4-5-20251001',
+  qa:          'claude-haiku-4-5-20251001',
+  devops:      'claude-haiku-4-5-20251001',
+  code_review: 'claude-opus-4-1-20250805',
+};
+
+const SUGGESTED_RATIONALE: Record<string, string> = {
+  product:     'Synthesises ambiguous requirements; benefits from stronger reasoning.',
+  pm:          'Plans dependencies and parallelism; benefits from stronger reasoning.',
+  architect:   'Design tradeoffs + ADRs benefit from the strongest reasoning model.',
+  frontend:    'Code generation against a locked architect contract — Haiku is fast + cheap.',
+  backend:     'Code generation against a locked architect contract — Haiku is fast + cheap.',
+  qa:          'Test generation against acceptance criteria — Haiku handles this well.',
+  devops:      'CI/CD config generation — Haiku is more than enough.',
+  code_review: 'Final quality gate; benefits from the strongest reasoning model.',
+};
 
 type Section = 'general' | 'pipeline' | 'agents' | 'cost' | 'approvals' | 'notifications' | 'advanced';
 
@@ -219,9 +275,23 @@ export default function AppSettings() {
                   <option value="system">System</option>
                 </select>
               </SettingRow>
-              <SettingRow label="Default AI Model" description="Model used by agents unless overridden per-agent">
+              <SettingRow label="Default AI Model" description="Model used by agents unless overridden per-agent. Haiku is fast + cheap; Sonnet is balanced; Opus is strongest reasoning.">
                 <select className="settings-select" value={config.defaultModel} onChange={e => update('defaultModel', e.target.value)}>
-                  {MODELS.filter(m => m.value).map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                  <optgroup label="Haiku — fast + cheap">
+                    {MODELS.filter(m => m.value && m.tier === 'haiku').map(m => (
+                      <option key={m.value} value={m.value}>{m.label}{m.recommended ? ' ★' : ''} {m.priceIn ? `· $${m.priceIn}/$${m.priceOut} per Mtok` : ''}</option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Sonnet — balanced">
+                    {MODELS.filter(m => m.value && m.tier === 'sonnet').map(m => (
+                      <option key={m.value} value={m.value}>{m.label}{m.recommended ? ' ★' : ''} {m.priceIn ? `· $${m.priceIn}/$${m.priceOut} per Mtok` : ''}</option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Opus — strongest reasoning">
+                    {MODELS.filter(m => m.value && m.tier === 'opus').map(m => (
+                      <option key={m.value} value={m.value}>{m.label}{m.recommended ? ' ★' : ''} {m.priceIn ? `· $${m.priceIn}/$${m.priceOut} per Mtok` : ''}</option>
+                    ))}
+                  </optgroup>
                 </select>
               </SettingRow>
               <SettingRow label="Verbose Logging" description="Show detailed agent reasoning in pipeline output">
@@ -255,16 +325,66 @@ export default function AppSettings() {
 
           {section === 'agents' && (
             <>
-              <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>
-                Override the AI model for specific agents. Leave blank to use the default model ({config.defaultModel.replace('claude-', '').replace('-20250514', '')}).
+              <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 8 }}>
+                Choose which Claude model each agent uses. Use the default ({modelLabel(config.defaultModel)}) for agents
+                where the default suits the task, or override with a stronger / cheaper model per role.
               </p>
-              {AGENTS.map(agent => (
-                <SettingRow key={agent.id} label={agent.name} description={`Model for the ${agent.name} agent`}>
-                  <select className="settings-select" value={config.agentModels[agent.id] || ''} onChange={e => updateAgentModel(agent.id, e.target.value)}>
-                    {MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-                  </select>
-                </SettingRow>
-              ))}
+              <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="settings-secondary-btn"
+                  onClick={() => setConfig(prev => ({ ...prev, agentModels: SUGGESTED_AGENT_MODELS }))}
+                  title="Apply a sensible per-role default (Sonnet for planning, Haiku for execution, Opus for review)"
+                >
+                  Apply suggested per-role defaults
+                </button>
+                <button
+                  type="button"
+                  className="settings-secondary-btn"
+                  onClick={() => setConfig(prev => ({ ...prev, agentModels: Object.fromEntries(AGENTS.map(a => [a.id, ''])) }))}
+                >
+                  Reset all to default
+                </button>
+              </div>
+              {AGENTS.map(agent => {
+                const current = config.agentModels[agent.id] || '';
+                const suggested = SUGGESTED_AGENT_MODELS[agent.id];
+                const suggestedLabel = suggested ? modelLabel(suggested) : null;
+                return (
+                  <SettingRow
+                    key={agent.id}
+                    label={agent.name}
+                    description={
+                      suggestedLabel && current !== suggested
+                        ? `Suggested: ${suggestedLabel} — ${SUGGESTED_RATIONALE[agent.id] || ''}`
+                        : SUGGESTED_RATIONALE[agent.id] || `Model for the ${agent.name} agent`
+                    }
+                  >
+                    <select
+                      className="settings-select"
+                      value={current}
+                      onChange={e => updateAgentModel(agent.id, e.target.value)}
+                    >
+                      <option value="">Use default ({modelLabel(config.defaultModel)})</option>
+                      <optgroup label="Haiku — fast + cheap">
+                        {MODELS.filter(m => m.value && m.tier === 'haiku').map(m => (
+                          <option key={m.value} value={m.value}>{m.label}{m.recommended ? ' ★' : ''}</option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Sonnet — balanced">
+                        {MODELS.filter(m => m.value && m.tier === 'sonnet').map(m => (
+                          <option key={m.value} value={m.value}>{m.label}{m.recommended ? ' ★' : ''}</option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Opus — strongest reasoning">
+                        {MODELS.filter(m => m.value && m.tier === 'opus').map(m => (
+                          <option key={m.value} value={m.value}>{m.label}{m.recommended ? ' ★' : ''}</option>
+                        ))}
+                      </optgroup>
+                    </select>
+                  </SettingRow>
+                );
+              })}
             </>
           )}
 

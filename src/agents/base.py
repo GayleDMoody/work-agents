@@ -78,7 +78,7 @@ class BaseAgent(ABC):
         agent_id: str = "",
         tools: list[Any] | None = None,
         llm: str | None = None,
-        model: str = "claude-sonnet-4-20250514",
+        model: str = "claude-haiku-4-5-20251001",
         allow_delegation: bool = False,
         max_iter: int = 20,
         max_retries: int = 2,

@@ -69,7 +69,7 @@ Guidelines:
 class AgentRouter(ClaudeMixin):
     """Classifies tickets and routes them to the right agents."""
 
-    def __init__(self, agents: dict[str, BaseAgent], model: str = "claude-sonnet-4-20250514"):
+    def __init__(self, agents: dict[str, BaseAgent], model: str = "claude-haiku-4-5-20251001"):
         self.agents = agents
         self.model = model
 

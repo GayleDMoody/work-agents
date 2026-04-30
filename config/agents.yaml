@@ -1,6 +1,6 @@
 agents:
   product:
-    model: claude-sonnet-4-20250514
+    model: claude-haiku-4-5-20251001
     max_retries: 2
     capabilities:
       - requirements_analysis
@@ -10,7 +10,7 @@ agents:
     approval_required: false
 
   pm:
-    model: claude-sonnet-4-20250514
+    model: claude-haiku-4-5-20251001
     max_retries: 2
     capabilities:
       - planning
@@ -20,7 +20,7 @@ agents:
     approval_required: false
 
   architect:
-    model: claude-sonnet-4-20250514
+    model: claude-haiku-4-5-20251001
     max_retries: 1
     capabilities:
       - architecture
@@ -32,7 +32,7 @@ agents:
     approval_required: true
 
   frontend:
-    model: claude-sonnet-4-20250514
+    model: claude-haiku-4-5-20251001
     max_retries: 3
     capabilities:
       - frontend_code
@@ -42,7 +42,7 @@ agents:
     approval_required: false
 
   backend:
-    model: claude-sonnet-4-20250514
+    model: claude-haiku-4-5-20251001
     max_retries: 3
     capabilities:
       - backend_code
@@ -52,7 +52,7 @@ agents:
     approval_required: false
 
   qa:
-    model: claude-sonnet-4-20250514
+    model: claude-haiku-4-5-20251001
     max_retries: 2
     capabilities:
       - testing
@@ -62,7 +62,7 @@ agents:
     approval_required: false
 
   devops:
-    model: claude-sonnet-4-20250514
+    model: claude-haiku-4-5-20251001
     max_retries: 2
     capabilities:
       - devops
@@ -73,7 +73,7 @@ agents:
     approval_required: true
 
   code_review:
-    model: claude-sonnet-4-20250514
+    model: claude-haiku-4-5-20251001
     max_retries: 1
     capabilities:
       - code_review

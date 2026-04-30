@@ -34,7 +34,7 @@ class ClaudeMixin:
         self,
         messages: list[dict[str, Any]],
         system_prompt: str = "",
-        model: str = "claude-sonnet-4-20250514",
+        model: str = "claude-haiku-4-5-20251001",
         max_tokens: int = 4096,
         temperature: float = 0.0,
         api_key: str | None = None,
@@ -95,7 +95,7 @@ class ClaudeMixin:
         self,
         messages: list[dict[str, Any]],
         system_prompt: str = "",
-        model: str = "claude-sonnet-4-20250514",
+        model: str = "claude-haiku-4-5-20251001",
         max_tokens: int = 4096,
         api_key: str | None = None,
     ) -> dict[str, Any]:

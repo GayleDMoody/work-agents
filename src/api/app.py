@@ -40,7 +40,7 @@ pipeline_runs: dict[str, dict] = {}
 connected_services: dict[str, dict] = {
     "jira": {"connected": False, "server_url": "", "email": "", "api_token": ""},
     "github": {"connected": False, "token": "", "repo": ""},
-    "anthropic": {"connected": False, "api_key": "", "model": "claude-sonnet-4-20250514"},
+    "anthropic": {"connected": False, "api_key": "", "model": "claude-haiku-4-5-20251001"},
 }
 websocket_clients: list[WebSocket] = []
 
@@ -56,7 +56,7 @@ AGENTS = [
         "successful_runs": 0,
         "total_cost": 0.0,
         "capabilities": ["requirements_analysis"],
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-haiku-4-5-20251001",
     },
     {
         "id": "pm",
@@ -68,7 +68,7 @@ AGENTS = [
         "successful_runs": 0,
         "total_cost": 0.0,
         "capabilities": ["planning"],
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-haiku-4-5-20251001",
     },
     {
         "id": "architect",
@@ -80,7 +80,7 @@ AGENTS = [
         "successful_runs": 0,
         "total_cost": 0.0,
         "capabilities": ["architecture"],
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-haiku-4-5-20251001",
     },
     {
         "id": "frontend",
@@ -92,7 +92,7 @@ AGENTS = [
         "successful_runs": 0,
         "total_cost": 0.0,
         "capabilities": ["frontend_code"],
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-haiku-4-5-20251001",
     },
     {
         "id": "backend",
@@ -104,7 +104,7 @@ AGENTS = [
         "successful_runs": 0,
         "total_cost": 0.0,
         "capabilities": ["backend_code"],
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-haiku-4-5-20251001",
     },
     {
         "id": "qa",
@@ -116,7 +116,7 @@ AGENTS = [
         "successful_runs": 0,
         "total_cost": 0.0,
         "capabilities": ["testing"],
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-haiku-4-5-20251001",
     },
     {
         "id": "devops",
@@ -128,7 +128,7 @@ AGENTS = [
         "successful_runs": 0,
         "total_cost": 0.0,
         "capabilities": ["devops"],
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-haiku-4-5-20251001",
     },
     {
         "id": "code_review",
@@ -140,7 +140,7 @@ AGENTS = [
         "successful_runs": 0,
         "total_cost": 0.0,
         "capabilities": ["code_review"],
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-haiku-4-5-20251001",
     },
 ]
 
@@ -444,7 +444,7 @@ async def test_connection(req: TestConnectionRequest):
             client = anthropic.Anthropic(api_key=config["api_key"])
             response = await asyncio.to_thread(
                 client.messages.create,
-                model=config.get("model", "claude-sonnet-4-20250514"),
+                model=config.get("model", "claude-haiku-4-5-20251001"),
                 max_tokens=10,
                 messages=[{"role": "user", "content": "ping"}],
             )
@@ -466,7 +466,7 @@ APP_CONFIG_PATH = Path("config/app_config.json")
 # Default app config
 _DEFAULT_APP_CONFIG = {
     "theme": "dark",
-    "defaultModel": "claude-sonnet-4-20250514",
+    "defaultModel": "claude-haiku-4-5-20251001",
     "verbose": False,
     "processType": "sequential",
     "maxFeedbackLoops": 3,

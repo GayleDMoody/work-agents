@@ -12,7 +12,7 @@ log = get_logger("cost_tracker")
 
 # Approximate pricing per 1M tokens (USD) as of 2025
 MODEL_PRICING = {
-    "claude-sonnet-4-20250514": {"input": 3.00, "output": 15.00},
+    "claude-haiku-4-5-20251001": {"input": 3.00, "output": 15.00},
     "claude-opus-4-20250514": {"input": 15.00, "output": 75.00},
     "claude-haiku-3-5-20241022": {"input": 0.80, "output": 4.00},
 }

@@ -40,7 +40,7 @@ def _apply_config_to_crew(crew: Crew, config: dict) -> Crew:
 
     # Agent model overrides
     agent_models = config.get("agentModels", {})
-    default_model = config.get("defaultModel", "claude-sonnet-4-20250514")
+    default_model = config.get("defaultModel", "claude-haiku-4-5-20251001")
 
     for agent in crew.agents:
         # Apply per-agent model override, or fall back to default
