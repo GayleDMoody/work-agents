@@ -435,10 +435,9 @@ async def trigger_pipeline(req: TriggerPipelineRequest):
 
             run["status"] = "completed" if result.success else "failed"
             run["current_phase"] = result.context.current_phase.value
-            run["artifacts"] = [
-                {"id": a.get("id", ""), "artifact_type": a.get("artifact_type", ""), "name": a.get("name", ""), "agent_id": a.get("agent_id", ""), "phase": a.get("phase", "")}
-                for a in result.context.artifacts
-            ]
+            # Keep the full enriched artifact (including files / json_dict / raw)
+            # so the code viewer can render the agent's actual output.
+            run["artifacts"] = list(result.context.artifacts)
 
             # Pull token usage / cost from the underlying CrewOutput if available.
             crew_out = getattr(result, "crew_output", None)
@@ -793,6 +792,68 @@ async def clear_chat_history(agent_id: str):
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "version": "0.1.0"}
+
+
+# ---------------------------------------------------------------------------
+# Notes board (agent investigation notes + threaded comments)
+# ---------------------------------------------------------------------------
+
+class NoteCreateRequest(BaseModel):
+    author: str = "user"
+    title: str
+    body: str = ""
+    tags: list[str] = []
+    ticket_key: str = ""
+    pipeline_run_id: str = ""
+
+
+class CommentCreateRequest(BaseModel):
+    author: str = "user"
+    body: str
+
+
+@app.get("/api/notes")
+async def list_notes_endpoint(ticket_key: str = ""):
+    from src.api import notes as notes_store
+    return notes_store.list_notes(ticket_key or None)
+
+
+@app.get("/api/notes/{note_id}")
+async def get_note_endpoint(note_id: str):
+    from src.api import notes as notes_store
+    note = notes_store.get_note(note_id)
+    if not note:
+        raise HTTPException(status_code=404, detail="note_not_found")
+    return note
+
+
+@app.post("/api/notes")
+async def add_note_endpoint(req: NoteCreateRequest):
+    from src.api import notes as notes_store
+    note = notes_store.add_note(
+        author=req.author, title=req.title, body=req.body,
+        tags=req.tags, ticket_key=req.ticket_key, pipeline_run_id=req.pipeline_run_id,
+    )
+    await broadcast_event("note_added", note)
+    return note
+
+
+@app.post("/api/notes/{note_id}/comments")
+async def add_comment_endpoint(note_id: str, req: CommentCreateRequest):
+    from src.api import notes as notes_store
+    comment = notes_store.add_comment(note_id, author=req.author, body=req.body)
+    if comment is None:
+        raise HTTPException(status_code=404, detail="note_not_found")
+    await broadcast_event("note_commented", {"note_id": note_id, "comment": comment})
+    return comment
+
+
+@app.delete("/api/notes/{note_id}")
+async def delete_note_endpoint(note_id: str):
+    from src.api import notes as notes_store
+    if not notes_store.delete_note(note_id):
+        raise HTTPException(status_code=404, detail="note_not_found")
+    return {"status": "deleted"}
 
 
 # ---------------------------------------------------------------------------

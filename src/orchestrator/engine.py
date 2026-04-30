@@ -133,18 +133,76 @@ async def _resolve_ticket(ticket_key: str) -> dict[str, Any]:
 
 
 def _build_run_result(ticket_key: str, ticket: dict[str, Any], crew_output: Any) -> RunResult:
-    """Translate a CrewOutput into the (.success / .context.*) shape app.py expects."""
+    """Translate a CrewOutput into the (.success / .context.*) shape app.py expects.
+
+    Each task output becomes an artifact carrying its raw text, parsed JSON,
+    and any files extracted from common JSON shapes ({"files": [...]}). This
+    is what the frontend code/diff viewer renders.
+    """
     success = getattr(crew_output, "success", False)
     artifacts: list[dict[str, Any]] = []
 
-    # Treat each task's output as an artifact for now — keeps the dashboard list useful
     for to in getattr(crew_output, "tasks_output", []) or []:
+        raw = getattr(to, "raw", "") or ""
+        # Try to parse the agent's output as JSON — most agents respond with structured JSON.
+        json_dict = getattr(to, "json_dict", None)
+        if json_dict is None and raw:
+            try:
+                import json as _json
+                json_dict = _json.loads(raw)
+            except Exception:
+                json_dict = None
+
+        # Extract files for code-producing agents (frontend / backend / devops / qa
+        # all use a `files` array in their JSON output per their prompts).
+        files: list[dict[str, Any]] = []
+        if isinstance(json_dict, dict):
+            for f in (json_dict.get("files") or []):
+                if isinstance(f, dict) and f.get("path"):
+                    files.append({
+                        "path": f.get("path", ""),
+                        "action": f.get("action", "create"),
+                        "content": f.get("content", "") or "",
+                        "description": f.get("description", "") or "",
+                    })
+            # QA agent uses `test_files` instead of `files`.
+            for f in (json_dict.get("test_files") or []):
+                if isinstance(f, dict) and f.get("path"):
+                    files.append({
+                        "path": f.get("path", ""),
+                        "action": f.get("action", "create"),
+                        "content": f.get("content", "") or "",
+                        "description": f"test file ({f.get('test_count', '?')} tests)",
+                    })
+            # DevOps agent uses `config_files`.
+            for f in (json_dict.get("config_files") or []):
+                if isinstance(f, dict) and f.get("path"):
+                    files.append({
+                        "path": f.get("path", ""),
+                        "action": f.get("action", "create"),
+                        "content": f.get("content", "") or "",
+                        "description": f.get("description", "config file"),
+                    })
+
+        agent_id = getattr(to, "agent", "")
+        # Pick a useful artifact type for the UI's groupings
+        artifact_type = "code" if files else (
+            "review" if agent_id == "code_review" else
+            "plan" if agent_id == "pm" else
+            "design" if agent_id == "architect" else
+            "analysis"
+        )
+
         artifacts.append({
             "id": getattr(to, "task_id", ""),
-            "artifact_type": "task_output",
-            "name": (getattr(to, "description", "") or "")[:80],
-            "agent_id": getattr(to, "agent", ""),
+            "artifact_type": artifact_type,
+            "name": (getattr(to, "description", "") or "").split("\n", 1)[0][:120],
+            "agent_id": agent_id,
             "phase": "execution",
+            "raw": raw[:60000],          # cap to keep payloads sane
+            "json_dict": json_dict if isinstance(json_dict, (dict, list)) else None,
+            "files": files,
+            "summary": getattr(to, "summary", "") or "",
         })
 
     current_phase = "complete" if success else "failed"

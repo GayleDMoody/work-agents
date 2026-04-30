@@ -24,16 +24,34 @@ export interface Phase {
   agent_id?: string;
 }
 
+export interface ArtifactFile {
+  path: string;
+  action: 'create' | 'modify' | 'delete' | string;
+  content: string;
+  description?: string;
+}
+
 export interface Artifact {
   id: string;
+  /** code | review | plan | design | analysis */
   artifact_type: string;
+  /** Human-readable label / first line of the task description */
   name: string;
-  content: string;
-  file_path?: string;
   agent_id: string;
   phase: string;
-  created_at: string;
-  metadata: Record<string, unknown>;
+  /** Raw text the agent produced (capped to 60k chars by the backend). */
+  raw?: string;
+  /** Parsed JSON shape if the agent's output was structured. */
+  json_dict?: Record<string, unknown> | unknown[] | null;
+  /** Files extracted from json_dict.files / test_files / config_files. */
+  files?: ArtifactFile[];
+  /** Short summary the agent provided (first line of `messages`). */
+  summary?: string;
+  /** Legacy fields kept for back-compat with older runs. */
+  content?: string;
+  file_path?: string;
+  created_at?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface PipelineEvent {

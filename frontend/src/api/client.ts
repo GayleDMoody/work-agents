@@ -90,7 +90,42 @@ export const api = {
   // Agent live-thought feed
   getAgentThoughts: (agentId: string) =>
     fetchJSON<AgentThought[]>(`/agents/${encodeURIComponent(agentId)}/thoughts`),
+
+  // Notes board
+  listNotes: (ticketKey?: string) =>
+    fetchJSON<Note[]>(`/notes${ticketKey ? `?ticket_key=${encodeURIComponent(ticketKey)}` : ''}`),
+
+  getNote: (id: string) =>
+    fetchJSON<Note>(`/notes/${encodeURIComponent(id)}`),
+
+  addNote: (body: { author?: string; title: string; body?: string; tags?: string[]; ticket_key?: string; pipeline_run_id?: string }) =>
+    fetchJSON<Note>('/notes', { method: 'POST', body: JSON.stringify(body) }),
+
+  addNoteComment: (id: string, body: { author?: string; body: string }) =>
+    fetchJSON<NoteComment>(`/notes/${encodeURIComponent(id)}/comments`, { method: 'POST', body: JSON.stringify(body) }),
+
+  deleteNote: (id: string) =>
+    fetchJSON<{ status: string }>(`/notes/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 };
+
+export interface NoteComment {
+  id: string;
+  author: string;
+  body: string;
+  created_at: number;
+}
+
+export interface Note {
+  id: string;
+  author: string;       // agent_id or "user"
+  title: string;
+  body: string;
+  tags: string[];
+  ticket_key: string;
+  pipeline_run_id: string;
+  created_at: number;
+  comments: NoteComment[];
+}
 
 /** Live thought event emitted by agents during a pipeline run. */
 export interface AgentThought {

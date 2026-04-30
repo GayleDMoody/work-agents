@@ -1,10 +1,11 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { LayoutDashboard, GitBranch, Bot, Puzzle, Settings, Zap } from 'lucide-react';
+import { LayoutDashboard, GitBranch, Bot, Puzzle, Settings, Zap, StickyNote } from 'lucide-react';
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/pipelines', icon: GitBranch, label: 'Pipelines' },
   { to: '/agents', icon: Bot, label: 'Agents' },
+  { to: '/notes', icon: StickyNote, label: 'Notes' },
   { to: '/connectors', icon: Puzzle, label: 'Connectors' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];

@@ -7,6 +7,7 @@ import PipelineDetail from './pages/PipelineDetail';
 import Agents from './pages/Agents';
 import SettingsPage from './pages/Settings';
 import AppSettings from './pages/AppSettings';
+import NotesPage from './pages/Notes';
 import { useTheme } from './hooks/useTheme';
 
 const queryClient = new QueryClient({
@@ -23,6 +24,7 @@ function AppInner() {
           <Route path="/pipelines" element={<Pipelines />} />
           <Route path="/pipelines/:id" element={<PipelineDetail />} />
           <Route path="/agents" element={<Agents />} />
+          <Route path="/notes" element={<NotesPage />} />
           <Route path="/connectors" element={<SettingsPage />} />
           <Route path="/settings" element={<AppSettings />} />
         </Route>
