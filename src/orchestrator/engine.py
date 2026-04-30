@@ -57,25 +57,50 @@ class RunResult:
 async def _resolve_ticket(ticket_key: str) -> dict[str, Any]:
     """Fetch a ticket from Jira if creds are present; otherwise fall back to a
     fixture or a stub so demos work without a real Jira connection."""
-    # Try real Jira if all three credentials are configured
+    # Try real Jira — prefer OAuth tokens (works on SSO sites) if connected,
+    # otherwise fall back to basic auth (email + API token).
     try:
         from src.settings import Settings
         from src.integrations.jira_client import JiraClient
+        from src.integrations.jira_oauth import (
+            ensure_fresh_tokens, get_tokens, JiraOAuthConfig,
+        )
         s = Settings()
-        if s.jira.server_url and s.jira.email and s.jira.api_token:
+        client: JiraClient | None = None
+
+        # OAuth path
+        if s.jira.oauth_client_id and s.jira.oauth_client_secret and get_tokens():
+            cfg = JiraOAuthConfig(
+                client_id=s.jira.oauth_client_id,
+                client_secret=s.jira.oauth_client_secret,
+                redirect_uri=s.jira.oauth_redirect_uri,
+            )
+            tokens = await ensure_fresh_tokens(cfg, verify_ssl=s.jira.verify_ssl)
+            if tokens and tokens.cloud_id:
+                client = JiraClient(
+                    oauth_token=tokens.access_token,
+                    cloud_id=tokens.cloud_id,
+                    verify_ssl=s.jira.verify_ssl,
+                    ca_bundle=s.jira.ca_bundle or None,
+                )
+
+        # Basic auth path (legacy / non-SSO sites)
+        if client is None and s.jira.server_url and s.jira.email and s.jira.api_token:
             client = JiraClient(
-                s.jira.server_url,
-                s.jira.email,
-                s.jira.api_token,
+                s.jira.server_url, s.jira.email, s.jira.api_token,
                 verify_ssl=s.jira.verify_ssl,
                 ca_bundle=s.jira.ca_bundle or None,
             )
+
+        if client is not None:
             ticket = await client.fetch_ticket(ticket_key)
             if ticket:
-                log.info("ticket_fetched_from_jira", ticket_key=ticket_key)
+                log.info("ticket_fetched_from_jira",
+                         ticket_key=ticket_key,
+                         mode="oauth" if client.is_oauth else "basic")
                 return ticket
     except Exception as e:
-        log.warning("jira_fetch_failed", ticket_key=ticket_key, error=str(e)[:160])
+        log.warning("jira_fetch_failed", ticket_key=ticket_key, error=str(e)[:200])
 
     # Try a fixture by ticket key
     try:

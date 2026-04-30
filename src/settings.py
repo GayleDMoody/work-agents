@@ -28,6 +28,12 @@ class JiraSettings(BaseSettings):
     verify_ssl: bool = True
     ca_bundle: str = ""
 
+    # OAuth 2.0 (3LO) — required for Cloud sites with SSO. Pop the values
+    # from your developer.atlassian.com app's Settings tab.
+    oauth_client_id: str = ""
+    oauth_client_secret: str = ""
+    oauth_redirect_uri: str = "http://localhost:8000/api/jira/oauth/callback"
+
 
 class GitHubSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="WORK_AGENTS_GITHUB_")

@@ -12,16 +12,26 @@ log = get_logger("jira_client")
 
 
 class JiraClient:
-    """Async wrapper around the jira Python library."""
+    """Async wrapper around the jira Python library.
+
+    Supports two auth modes:
+        1. Basic auth (email + API token) — works only on Atlassian Cloud sites
+           that don't enforce SSO. Pass server_url + email + api_token.
+        2. OAuth 2.0 (3LO) Bearer auth — required for SSO-enforced sites.
+           Pass oauth_token + cloud_id; the client routes calls through
+           https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/...
+    """
 
     def __init__(
         self,
-        server_url: str,
-        email: str,
-        api_token: str,
+        server_url: str = "",
+        email: str = "",
+        api_token: str = "",
         *,
         verify_ssl: bool = True,
         ca_bundle: str | None = None,
+        oauth_token: str | None = None,
+        cloud_id: str | None = None,
     ):
         """
         Args:
@@ -40,26 +50,51 @@ class JiraClient:
         self.api_token = api_token
         self.verify_ssl = verify_ssl
         self.ca_bundle = ca_bundle
+        self.oauth_token = oauth_token
+        self.cloud_id = cloud_id
         self._jira = None
+
+        if oauth_token and not cloud_id:
+            raise ValueError("OAuth mode requires both oauth_token and cloud_id")
+        if not oauth_token and not (server_url and email and api_token):
+            raise ValueError("Basic auth mode requires server_url + email + api_token")
+
+    @property
+    def is_oauth(self) -> bool:
+        return self.oauth_token is not None
 
     def _get_client(self):
         if self._jira is None:
             from jira import JIRA
-            # The jira lib accepts a ``verify`` kwarg via options that controls the
-            # underlying requests Session. ca_bundle (if provided) wins over a plain
-            # bool — point it at the cert and we still get verification.
-            verify: bool | str
-            if self.ca_bundle:
-                verify = self.ca_bundle
+            verify: bool | str = self.ca_bundle or self.verify_ssl
+
+            if self.is_oauth:
+                # OAuth: route through api.atlassian.com/ex/jira/{cloud_id}
+                # using a Bearer token. The jira lib accepts a custom Session
+                # via the get_server_info=False trick + a session with auth header.
+                import requests
+                session = requests.Session()
+                session.headers.update({
+                    "Authorization": f"Bearer {self.oauth_token}",
+                    "Accept": "application/json",
+                })
+                session.verify = verify
+                base = f"https://api.atlassian.com/ex/jira/{self.cloud_id}"
+                # Pass an empty basic_auth to bypass the lib's auth setup; the
+                # session's Authorization header carries the real auth.
+                options = {"server": base, "verify": verify, "rest_api_version": "3"}
+                self._jira = JIRA(options=options, get_server_info=False)
+                # Replace the auto-created session so our Bearer header sticks
+                self._jira._session = session
             else:
-                verify = self.verify_ssl
-            options = {"server": self.server_url, "verify": verify}
-            self._jira = JIRA(options=options, basic_auth=(self.email, self.api_token))
+                # Basic auth (email + API token), direct site URL
+                options = {"server": self.server_url, "verify": verify}
+                self._jira = JIRA(options=options, basic_auth=(self.email, self.api_token))
+
             if not self.verify_ssl and not self.ca_bundle:
                 log.warning("jira_ssl_verification_disabled",
-                            server=self.server_url,
+                            mode="oauth" if self.is_oauth else "basic",
                             note="trust_only_on_corporate_intercepting_proxies")
-                # Suppress the urllib3 InsecureRequestWarning so logs stay clean
                 try:
                     import urllib3
                     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)

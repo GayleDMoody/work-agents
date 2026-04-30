@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { CheckCircle, XCircle, Loader2, Search, X, ExternalLink, Puzzle, ChevronRight } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { CheckCircle, XCircle, Loader2, Search, X, ExternalLink, Puzzle, ChevronRight, Link as LinkIcon, Unlink } from 'lucide-react';
 import { api } from '../api/client';
 import ConnectorLogo from '../components/ConnectorLogos';
 
@@ -25,20 +25,20 @@ interface Plugin {
   connected: boolean;  // connection verified
   fields: PluginField[];
   docsUrl?: string;
+  /** OAuth-based connectors skip the form-based config and use a redirect flow.
+   *  Default: 'token' (form with API token / credentials). */
+  auth?: 'oauth' | 'token';
 }
 
 const PLUGINS: Plugin[] = [
   // Project Management
   {
     id: 'jira', name: 'Jira', category: 'project-management',
-    description: 'Fetch tickets, post updates, and track work across sprints. Supports JQL polling for automatic ticket intake.',
+    description: 'Fetch tickets, post updates, and track work across sprints. Uses Atlassian OAuth 2.0 (3LO) so SSO-protected workspaces work out of the box — no API tokens to copy around.',
     icon: '🔵', color: '#2684FF', installed: false, connected: false,
-    fields: [
-      { key: 'server_url', label: 'Server URL', placeholder: 'https://your-company.atlassian.net' },
-      { key: 'email', label: 'Email', placeholder: 'your-email@company.com' },
-      { key: 'api_token', label: 'API Token', type: 'password', placeholder: 'Your Jira API token' },
-    ],
-    docsUrl: 'https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/',
+    auth: 'oauth',
+    fields: [],
+    docsUrl: 'https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/',
   },
   {
     id: 'linear', name: 'Linear', category: 'project-management',
@@ -209,13 +209,68 @@ const CATEGORIES: { id: string; label: string }[] = [
 // Connector config modal
 // ---------------------------------------------------------------------------
 
-function ConnectorModal({ plugin, onClose }: { plugin: Plugin; onClose: () => void }) {
+function ConnectorModal({ plugin, onClose, onStatusChange }: {
+  plugin: Plugin;
+  onClose: () => void;
+  onStatusChange?: () => void;
+}) {
   const [form, setForm] = useState<Record<string, string>>(
     Object.fromEntries(plugin.fields.map(f => [f.key, '']))
   );
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
   const [saved, setSaved] = useState(false);
+
+  // OAuth state for OAuth-based connectors (currently Jira)
+  const isOAuth = plugin.auth === 'oauth';
+  const [oauthStatus, setOAuthStatus] = useState<{ connected: boolean; site_url?: string; expires_in_seconds?: number } | null>(null);
+  const [oauthLoading, setOAuthLoading] = useState(false);
+
+  // Poll OAuth status on mount + listen for the popup-postMessage so we can
+  // refresh as soon as the auth flow completes.
+  useEffect(() => {
+    if (!isOAuth) return;
+    let mounted = true;
+    const refresh = async () => {
+      try {
+        const s = await api.jiraOAuthStatus();
+        if (mounted) {
+          setOAuthStatus(s);
+          onStatusChange?.();
+        }
+      } catch { /* ignore */ }
+    };
+    refresh();
+    const onMessage = (e: MessageEvent) => {
+      if (e.data?.type === 'jira-oauth') {
+        // Give the backend a moment to finish persisting tokens, then refresh
+        setTimeout(refresh, 400);
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => { mounted = false; window.removeEventListener('message', onMessage); };
+  }, [isOAuth, onStatusChange]);
+
+  const handleConnectOAuth = () => {
+    if (!isOAuth) return;
+    setOAuthLoading(true);
+    const url = api.jiraOAuthStartUrl();
+    const w = 600, h = 700;
+    const left = window.screenX + (window.innerWidth - w) / 2;
+    const top = window.screenY + (window.innerHeight - h) / 2;
+    window.open(url, 'jira-oauth', `width=${w},height=${h},left=${left},top=${top}`);
+    // Loading flag flips off when status posts back via postMessage
+    setTimeout(() => setOAuthLoading(false), 30000);
+  };
+
+  const handleDisconnectOAuth = async () => {
+    if (!isOAuth) return;
+    try {
+      await api.jiraOAuthDisconnect();
+      setOAuthStatus({ connected: false });
+      onStatusChange?.();
+    } catch { /* ignore */ }
+  };
 
   const handleSave = async () => {
     try {
@@ -254,28 +309,61 @@ function ConnectorModal({ plugin, onClose }: { plugin: Plugin; onClose: () => vo
         <div className="connector-modal-body">
           <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20, lineHeight: 1.6 }}>{plugin.description}</p>
 
-          {plugin.fields.map(field => (
-            <div className="form-group" key={field.key}>
-              <label>{field.label}</label>
-              <input
-                className="form-input"
-                type={field.type || 'text'}
-                placeholder={field.placeholder}
-                value={form[field.key] || ''}
-                onChange={e => setForm({ ...form, [field.key]: e.target.value })}
-              />
-            </div>
-          ))}
+          {isOAuth ? (
+            <>
+              {oauthStatus?.connected ? (
+                <div className="alert success" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <CheckCircle size={14} /> <strong>Connected</strong>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                    Workspace: <code>{oauthStatus.site_url || '(unknown)'}</code>
+                  </div>
+                  {typeof oauthStatus.expires_in_seconds === 'number' && (
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                      Token refreshes automatically. Current expiry: ~{Math.round(oauthStatus.expires_in_seconds / 60)} min.
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="alert" style={{ background: 'rgba(88,166,255,0.06)', borderColor: 'rgba(88,166,255,0.18)', color: 'var(--text-secondary)' }}>
+                  <div style={{ fontSize: 12, lineHeight: 1.6 }}>
+                    Click <strong>Connect with Atlassian</strong> below. A popup will open the
+                    Atlassian sign-in flow (corporate SSO supported). After you approve the
+                    requested scopes, the popup closes automatically and this card switches
+                    to <em>Connected</em>.
+                    <br /><br />
+                    <strong>Required scopes:</strong> <code>read:jira-work</code>, <code>read:jira-user</code>, <code>offline_access</code>.
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              {plugin.fields.map(field => (
+                <div className="form-group" key={field.key}>
+                  <label>{field.label}</label>
+                  <input
+                    className="form-input"
+                    type={field.type || 'text'}
+                    placeholder={field.placeholder}
+                    value={form[field.key] || ''}
+                    onChange={e => setForm({ ...form, [field.key]: e.target.value })}
+                  />
+                </div>
+              ))}
 
-          {result && (
-            <div className={`alert ${result.success ? 'success' : 'error'}`}>
-              {result.success ? <CheckCircle size={14} /> : <XCircle size={14} />}
-              {result.message}
-            </div>
-          )}
+              {result && (
+                <div className={`alert ${result.success ? 'success' : 'error'}`}>
+                  {result.success ? <CheckCircle size={14} /> : <XCircle size={14} />}
+                  {result.message}
+                </div>
+              )}
 
-          {saved && (
-            <div className="alert success"><CheckCircle size={14} /> Configuration saved</div>
+              {saved && (
+                <div className="alert success"><CheckCircle size={14} /> Configuration saved</div>
+              )}
+            </>
           )}
 
           {plugin.docsUrl && (
@@ -286,12 +374,26 @@ function ConnectorModal({ plugin, onClose }: { plugin: Plugin; onClose: () => vo
         </div>
 
         <div className="connector-modal-footer">
-          <button className="btn btn-outline" onClick={handleTest} disabled={testing}>
-            {testing ? <><Loader2 size={14} className="spin" /> Testing...</> : 'Test Connection'}
-          </button>
-          <button className="btn btn-primary" onClick={handleSave}>
-            Save & Connect
-          </button>
+          {isOAuth ? (
+            oauthStatus?.connected ? (
+              <button className="btn btn-outline" onClick={handleDisconnectOAuth}>
+                <Unlink size={14} /> Disconnect
+              </button>
+            ) : (
+              <button className="btn btn-primary" onClick={handleConnectOAuth} disabled={oauthLoading}>
+                {oauthLoading ? <><Loader2 size={14} className="spin" /> Waiting for auth…</> : <><LinkIcon size={14} /> Connect with Atlassian</>}
+              </button>
+            )
+          ) : (
+            <>
+              <button className="btn btn-outline" onClick={handleTest} disabled={testing}>
+                {testing ? <><Loader2 size={14} className="spin" /> Testing...</> : 'Test Connection'}
+              </button>
+              <button className="btn btn-primary" onClick={handleSave}>
+                Save & Connect
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -306,14 +408,41 @@ export default function SettingsPage() {
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('all');
   const [configuring, setConfiguring] = useState<Plugin | null>(null);
+  // Live connection state for OAuth-based connectors. Currently only Jira;
+  // the shape leaves room to add others (GitHub OAuth, Slack OAuth, etc.).
+  const [oauthState, setOAuthState] = useState<Record<string, { connected: boolean; site_url?: string }>>({});
 
-  const filtered = PLUGINS.filter(p => {
+  const refreshOAuthState = async () => {
+    try {
+      const j = await api.jiraOAuthStatus();
+      setOAuthState(prev => ({ ...prev, jira: { connected: j.connected, site_url: j.site_url } }));
+    } catch { /* ignore */ }
+  };
+
+  useEffect(() => {
+    refreshOAuthState();
+    // Listen for the popup-postMessage (so the tile updates the moment auth completes)
+    const onMessage = (e: MessageEvent) => {
+      if (e.data?.type === 'jira-oauth') setTimeout(refreshOAuthState, 400);
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
+
+  // Merge live OAuth state onto each plugin so the card reflects reality.
+  const liveStatePlugins = PLUGINS.map(p => {
+    const live = oauthState[p.id];
+    if (live) return { ...p, connected: live.connected, installed: live.connected };
+    return p;
+  });
+
+  const filtered = liveStatePlugins.filter(p => {
     const matchesSearch = !search || p.name.toLowerCase().includes(search.toLowerCase()) || p.description.toLowerCase().includes(search.toLowerCase());
     const matchesCat = category === 'all' || p.category === category;
     return matchesSearch && matchesCat;
   });
 
-  const installed = PLUGINS.filter(p => p.installed);
+  const installed = liveStatePlugins.filter(p => p.installed);
 
   return (
     <>
@@ -382,7 +511,11 @@ export default function SettingsPage() {
 
       {/* Config modal */}
       {configuring && (
-        <ConnectorModal plugin={configuring} onClose={() => setConfiguring(null)} />
+        <ConnectorModal
+          plugin={configuring}
+          onClose={() => { setConfiguring(null); refreshOAuthState(); }}
+          onStatusChange={refreshOAuthState}
+        />
       )}
 
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>

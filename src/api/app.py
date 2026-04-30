@@ -9,8 +9,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
 from src.observability.logging import setup_logging, get_logger
@@ -675,3 +676,150 @@ async def clear_chat_history(agent_id: str):
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "version": "0.1.0"}
+
+
+# ---------------------------------------------------------------------------
+# Jira OAuth 2.0 (3LO) flow
+# ---------------------------------------------------------------------------
+
+def _jira_oauth_config():
+    """Build a JiraOAuthConfig from current settings, or raise 400 if not configured."""
+    from src.integrations.jira_oauth import JiraOAuthConfig
+    from src.settings import Settings
+    s = Settings()
+    if not (s.jira.oauth_client_id and s.jira.oauth_client_secret):
+        raise HTTPException(
+            status_code=400,
+            detail="Jira OAuth not configured. Set WORK_AGENTS_JIRA_OAUTH_CLIENT_ID and "
+                   "WORK_AGENTS_JIRA_OAUTH_CLIENT_SECRET in .env, then restart.",
+        )
+    return JiraOAuthConfig(
+        client_id=s.jira.oauth_client_id,
+        client_secret=s.jira.oauth_client_secret,
+        redirect_uri=s.jira.oauth_redirect_uri,
+    ), s.jira.verify_ssl
+
+
+@app.get("/api/jira/oauth/start")
+async def jira_oauth_start():
+    """Return the Atlassian authorize URL the browser should open."""
+    from src.integrations.jira_oauth import build_authorize_url
+    cfg, _verify = _jira_oauth_config()
+    url, _state = build_authorize_url(cfg)
+    return {"authorize_url": url}
+
+
+@app.get("/api/jira/oauth/redirect")
+async def jira_oauth_redirect():
+    """Convenience endpoint: build the authorize URL and HTTP-302 to it.
+    Useful for one-click sign-in from a button or a manually-pasted URL."""
+    from src.integrations.jira_oauth import build_authorize_url
+    cfg, _verify = _jira_oauth_config()
+    url, _state = build_authorize_url(cfg)
+    return RedirectResponse(url, status_code=302)
+
+
+@app.get("/api/jira/oauth/callback", response_class=HTMLResponse)
+async def jira_oauth_callback(code: str = "", state: str = "", error: str = ""):
+    """Atlassian redirects here after the user authorizes the app.
+
+    Exchanges the auth code for tokens and renders a small "you can close
+    this tab" page that pings the parent window to refresh.
+    """
+    if error:
+        log.error("oauth_callback_error", error=error)
+        return HTMLResponse(_oauth_result_html(False, f"Atlassian returned error: {error}"))
+    if not code or not state:
+        return HTMLResponse(_oauth_result_html(False, "Missing code or state in callback."))
+
+    from src.integrations.jira_oauth import exchange_code_for_tokens
+    cfg, verify_ssl = _jira_oauth_config()
+    try:
+        tokens = await exchange_code_for_tokens(cfg, code, state, verify_ssl=verify_ssl)
+    except Exception as e:
+        log.error("oauth_callback_exchange_failed", error=str(e))
+        return HTMLResponse(_oauth_result_html(False, f"Token exchange failed: {str(e)[:160]}"))
+
+    # Mark Jira as connected in the live services map
+    connected_services["jira"]["connected"] = True
+    connected_services["jira"]["server_url"] = tokens.site_url
+    connected_services["jira"]["email"] = ""
+
+    return HTMLResponse(_oauth_result_html(
+        True,
+        f"Connected to {tokens.site_url}. You can close this tab — the dashboard will pick it up automatically.",
+    ))
+
+
+@app.get("/api/jira/oauth/status")
+async def jira_oauth_status():
+    """Lightweight endpoint the frontend can poll to know if OAuth completed."""
+    from src.integrations.jira_oauth import get_tokens
+    t = get_tokens()
+    if not t:
+        return {"connected": False}
+    return {
+        "connected": True,
+        "site_url": t.site_url,
+        "cloud_id": t.cloud_id,
+        "expires_in_seconds": max(0, int(t.expires_at - __import__("time").time())),
+    }
+
+
+@app.post("/api/jira/oauth/disconnect")
+async def jira_oauth_disconnect():
+    from src.integrations.jira_oauth import disconnect
+    disconnect()
+    connected_services["jira"]["connected"] = False
+    return {"status": "disconnected"}
+
+
+@app.get("/api/jira/ticket/{ticket_key}")
+async def jira_fetch_ticket(ticket_key: str):
+    """Fetch a single Jira ticket using the configured auth (OAuth preferred,
+    basic fallback). Returns the ticket as a dict, or {error: ...}.
+    Useful for verifying the integration before triggering a full pipeline."""
+    from src.orchestrator.engine import _resolve_ticket
+    try:
+        ticket = await _resolve_ticket(ticket_key)
+        # _resolve_ticket falls back to a stub when no source works — flag that
+        # so callers can tell real Jira hits from stub fallbacks.
+        is_stub = (ticket.get("description", "") or "").startswith("No ticket details available")
+        return {
+            "source": "stub" if is_stub else "jira_or_fixture",
+            "ticket": ticket,
+        }
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {str(e)[:200]}"}
+
+
+def _oauth_result_html(success: bool, message: str) -> str:
+    color = "#3fb950" if success else "#f85149"
+    icon = "✓" if success else "✗"
+    title = "Jira connected" if success else "Jira connection failed"
+    return f"""<!doctype html>
+<html><head><title>{title}</title>
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+         background: #050710; color: #c9d1d9; display: grid; place-items: center;
+         min-height: 100vh; margin: 0; padding: 20px; }}
+  .card {{ background: #0d1117; border: 1px solid #1e2229; border-radius: 12px;
+           padding: 32px; max-width: 480px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }}
+  .icon {{ font-size: 48px; color: {color}; margin-bottom: 8px; }}
+  h1 {{ font-size: 18px; margin: 8px 0; }}
+  p {{ font-size: 14px; color: #8b949e; line-height: 1.5; }}
+  .hint {{ margin-top: 18px; padding: 12px; background: #161b22; border-radius: 8px;
+           font-size: 12px; color: #6e7681; }}
+</style></head>
+<body><div class="card">
+  <div class="icon">{icon}</div>
+  <h1>{title}</h1>
+  <p>{message}</p>
+  <div class="hint">This window will close automatically in a moment.</div>
+</div>
+<script>
+  // Notify the opener (the dashboard) that auth completed, then close.
+  try {{ window.opener && window.opener.postMessage({{type: 'jira-oauth', success: {str(success).lower()} }}, '*'); }} catch(e) {{}}
+  setTimeout(() => {{ try {{ window.close(); }} catch(e) {{}} }}, 2500);
+</script>
+</body></html>"""

@@ -37,6 +37,7 @@ secrets/
 
 # --- Runtime state (per-machine config) ---
 config/app_config.json
+config/jira_oauth_tokens.json
 .claude/settings.local.json
 
 # --- Editor / OS ---

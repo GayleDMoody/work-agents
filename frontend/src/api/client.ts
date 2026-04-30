@@ -70,4 +70,20 @@ export const api = {
 
   clearChat: (agentId: string) =>
     fetchJSON<{ status: string }>(`/agents/${agentId}/chat`, { method: 'DELETE' }),
+
+  // Jira OAuth
+  jiraOAuthStatus: () =>
+    fetchJSON<{ connected: boolean; site_url?: string; cloud_id?: string; expires_in_seconds?: number }>(
+      '/jira/oauth/status',
+    ),
+
+  jiraOAuthStartUrl: () => `${BASE_URL}/jira/oauth/redirect`,
+
+  jiraOAuthDisconnect: () =>
+    fetchJSON<{ status: string }>('/jira/oauth/disconnect', { method: 'POST' }),
+
+  jiraFetchTicket: (ticketKey: string) =>
+    fetchJSON<{ source: string; ticket?: Record<string, unknown>; error?: string }>(
+      `/jira/ticket/${encodeURIComponent(ticketKey)}`,
+    ),
 };
