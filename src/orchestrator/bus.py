@@ -85,6 +85,17 @@ class AgentBus:
             metadata=metadata or {},
         )
         self.messages.append(msg)
+        # Stream into the thought-feed so dashboard chat panels show inter-agent comms.
+        try:
+            from src.agents.claude_mixin import _emit_agent_thought
+            label = f"to {to_agent}" if to_agent and to_agent != "*" else "to everyone"
+            _emit_agent_thought(from_agent, "message_sent",
+                                f"[{msg_type.value} {label}] {content[:600]}")
+            if to_agent and to_agent != "*":
+                _emit_agent_thought(to_agent, "message_received",
+                                    f"[{msg_type.value} from {from_agent}] {content[:600]}")
+        except Exception:
+            pass
         log.info("message_sent", from_agent=from_agent, to_agent=to_agent,
                  type=msg_type.value, content=content[:80])
         return msg

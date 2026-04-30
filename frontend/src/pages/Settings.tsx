@@ -408,30 +408,50 @@ export default function SettingsPage() {
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('all');
   const [configuring, setConfiguring] = useState<Plugin | null>(null);
-  // Live connection state for OAuth-based connectors. Currently only Jira;
-  // the shape leaves room to add others (GitHub OAuth, Slack OAuth, etc.).
-  const [oauthState, setOAuthState] = useState<Record<string, { connected: boolean; site_url?: string }>>({});
+  // Live connection state for ALL connectors. Sources:
+  //   - /api/dashboard.services for credential-backed connectors (anthropic, github)
+  //   - /api/jira/oauth/status for the OAuth-based Jira tile
+  // Both are merged into a single map keyed by connector id so PluginCard can
+  // render the same "Connected" badge regardless of how the connector authed.
+  const [liveStatus, setLiveStatus] = useState<Record<string, { connected: boolean; detail?: string }>>({});
 
-  const refreshOAuthState = async () => {
+  const refreshLiveStatus = async () => {
+    const merged: Record<string, { connected: boolean; detail?: string }> = {};
+    try {
+      const dash = await api.getDashboard();
+      Object.entries(dash.services || {}).forEach(([id, info]) => {
+        if (info && typeof info === 'object' && 'connected' in info) {
+          merged[id] = { connected: !!info.connected };
+        }
+      });
+    } catch { /* ignore */ }
     try {
       const j = await api.jiraOAuthStatus();
-      setOAuthState(prev => ({ ...prev, jira: { connected: j.connected, site_url: j.site_url } }));
+      // Jira OAuth status wins over basic-auth detection — when OAuth is in
+      // play it includes the site URL, which is more useful for display.
+      merged.jira = { connected: j.connected, detail: j.site_url };
     } catch { /* ignore */ }
+    setLiveStatus(merged);
   };
 
   useEffect(() => {
-    refreshOAuthState();
-    // Listen for the popup-postMessage (so the tile updates the moment auth completes)
+    refreshLiveStatus();
     const onMessage = (e: MessageEvent) => {
-      if (e.data?.type === 'jira-oauth') setTimeout(refreshOAuthState, 400);
+      if (e.data?.type === 'jira-oauth') setTimeout(refreshLiveStatus, 400);
     };
     window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
+    // Refresh every 5s while on the page so test-connection / disconnect
+    // results show up without a manual reload.
+    const t = setInterval(refreshLiveStatus, 5000);
+    return () => {
+      window.removeEventListener('message', onMessage);
+      clearInterval(t);
+    };
   }, []);
 
-  // Merge live OAuth state onto each plugin so the card reflects reality.
+  // Merge live state onto each plugin so the card reflects reality.
   const liveStatePlugins = PLUGINS.map(p => {
-    const live = oauthState[p.id];
+    const live = liveStatus[p.id];
     if (live) return { ...p, connected: live.connected, installed: live.connected };
     return p;
   });
@@ -513,8 +533,8 @@ export default function SettingsPage() {
       {configuring && (
         <ConnectorModal
           plugin={configuring}
-          onClose={() => { setConfiguring(null); refreshOAuthState(); }}
-          onStatusChange={refreshOAuthState}
+          onClose={() => { setConfiguring(null); refreshLiveStatus(); }}
+          onStatusChange={refreshLiveStatus}
         />
       )}
 

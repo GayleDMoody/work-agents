@@ -85,22 +85,26 @@ def CrewBase(cls):
             else:
                 self.tasks_config = {}
 
-        # Collect @agent methods
+        # Collect @agent and @task methods. Walk the MRO in reverse + use the
+        # class __dict__ directly so methods come out in *source-declaration*
+        # order rather than alphabetical (dir() sorts alphabetically, which
+        # would put `review_code` before `write_backend_code` and break the
+        # pipeline ordering).
         self._agent_methods = []
         self._task_methods = []
-
-        for attr_name in dir(self):
-            if attr_name.startswith("_"):
-                continue
-            try:
-                attr = getattr(type(self), attr_name, None)
-                if callable(attr):
-                    if getattr(attr, "_is_crew_agent", False):
-                        self._agent_methods.append(attr_name)
-                    elif getattr(attr, "_is_crew_task", False):
-                        self._task_methods.append(attr_name)
-            except Exception:
-                pass
+        seen: set[str] = set()
+        for klass in reversed(type(self).__mro__):
+            for attr_name, attr in klass.__dict__.items():
+                if attr_name.startswith("_") or attr_name in seen:
+                    continue
+                if not callable(attr):
+                    continue
+                if getattr(attr, "_is_crew_agent", False):
+                    self._agent_methods.append(attr_name)
+                    seen.add(attr_name)
+                elif getattr(attr, "_is_crew_task", False):
+                    self._task_methods.append(attr_name)
+                    seen.add(attr_name)
 
     @property
     def agents(self) -> list:

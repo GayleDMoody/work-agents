@@ -86,4 +86,24 @@ export const api = {
     fetchJSON<{ source: string; ticket?: Record<string, unknown>; error?: string }>(
       `/jira/ticket/${encodeURIComponent(ticketKey)}`,
     ),
+
+  // Agent live-thought feed
+  getAgentThoughts: (agentId: string) =>
+    fetchJSON<AgentThought[]>(`/agents/${encodeURIComponent(agentId)}/thoughts`),
 };
+
+/** Live thought event emitted by agents during a pipeline run. */
+export interface AgentThought {
+  agent_id: string;
+  /** prompt, response, error, message_sent, message_received */
+  kind: 'prompt' | 'response' | 'error' | 'message_sent' | 'message_received';
+  content: string;
+  timestamp: number;
+  model?: string;
+  input_tokens?: number;
+  output_tokens?: number;
+  duration_seconds?: number;
+}
+
+/** WebSocket URL for live pipeline events (agent_thought, agent_started, etc.). */
+export const WS_URL = BASE_URL.replace(/^http/, 'ws').replace(/\/api$/, '/ws');

@@ -253,7 +253,7 @@ export default function IsometricOffice({ agents, onAgentClick }: Props) {
                 icon={vis.icon}
                 label={vis.label}
                 role={agent?.role ?? ''}
-                busyText={vis.busyText}
+                busyText={agent?.current_task && agent.current_task.length > 0 ? agent.current_task : vis.busyText}
                 onClick={() => onAgentClick?.(ws.id)}
               />
             );
@@ -531,30 +531,36 @@ function Workstation({
         {role}
       </text>
 
-      {/* Speech bubble above monitor when busy */}
-      {status === 'busy' && (
-        <g className="iso-bubble" pointerEvents="none">
-          <rect
-            x={bubbleX - 55} y={bubbleY - 11}
-            width="110" height="18"
-            rx="4"
-            fill="rgba(10,12,20,0.9)"
-            stroke={color}
-            strokeWidth="0.8"
-            strokeOpacity="0.8"
-          />
-          <text
-            x={bubbleX} y={bubbleY + 2}
-            textAnchor="middle"
-            fontSize="9"
-            fontWeight="600"
-            fill="#dde3ec"
-            style={{ userSelect: 'none', fontFamily: 'inherit' }}
-          >
-            {busyText}
-          </text>
-        </g>
-      )}
+      {/* Speech bubble above monitor when busy. Width adapts to message length so
+          short generic text and longer real-task descriptions both look right. */}
+      {status === 'busy' && (() => {
+        const text = busyText || '';
+        // Approximate width — 5.2px per char at fontSize 9 + 14px padding, capped
+        const w = Math.min(220, Math.max(110, text.length * 5.2 + 14));
+        return (
+          <g className="iso-bubble" pointerEvents="none">
+            <rect
+              x={bubbleX - w / 2} y={bubbleY - 11}
+              width={w} height="18"
+              rx="4"
+              fill="rgba(10,12,20,0.92)"
+              stroke={color}
+              strokeWidth="0.8"
+              strokeOpacity="0.8"
+            />
+            <text
+              x={bubbleX} y={bubbleY + 2}
+              textAnchor="middle"
+              fontSize="9"
+              fontWeight="600"
+              fill="#dde3ec"
+              style={{ userSelect: 'none', fontFamily: 'inherit' }}
+            >
+              {text.length > 40 ? text.slice(0, 39) + '…' : text}
+            </text>
+          </g>
+        );
+      })()}
 
       {/* Error badge */}
       {status === 'error' && (

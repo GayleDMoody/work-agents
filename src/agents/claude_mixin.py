@@ -14,6 +14,72 @@ from src.observability.logging import get_logger
 log = get_logger("claude_mixin")
 
 
+# ---------------------------------------------------------------------------
+# Agent thought-stream emitter
+# ---------------------------------------------------------------------------
+# A process-wide list of subscribers that get notified every time an agent
+# emits a "thought" — i.e. a Claude prompt going out, a Claude response coming
+# back, an error, or an inter-agent message. The API layer registers a
+# subscriber that converts each event into a WebSocket broadcast so the
+# dashboard can render live agent chat panels during a pipeline run.
+
+from typing import Callable, List
+
+_thought_subscribers: List[Callable[[dict], None]] = []
+
+
+def subscribe_to_thoughts(callback: Callable[[dict], None]) -> Callable[[], None]:
+    """Register a callback that gets called on every agent thought event.
+    Returns an unsubscribe function. Callbacks must be quick / non-blocking;
+    long-running work should be dispatched to a task."""
+    _thought_subscribers.append(callback)
+    def unsubscribe() -> None:
+        try:
+            _thought_subscribers.remove(callback)
+        except ValueError:
+            pass
+    return unsubscribe
+
+
+def _emit_agent_thought(agent_id: str, kind: str, content: str, *, extra: dict | None = None) -> None:
+    """kind: 'prompt' | 'response' | 'error' | 'message_sent' | 'message_received'."""
+    if not _thought_subscribers:
+        return
+    payload = {
+        "agent_id": agent_id,
+        "kind": kind,
+        "content": content,
+        "timestamp": time.time(),
+    }
+    if extra:
+        payload.update(extra)
+    for cb in list(_thought_subscribers):
+        try:
+            cb(payload)
+        except Exception:
+            pass
+
+
+def _summarise_messages(messages: list[dict[str, Any]], system_prompt: str) -> str:
+    """Build a short human-readable preview of an outgoing Claude request for
+    the live thought stream. Trims long content so the chat panel stays usable."""
+    parts: list[str] = []
+    if system_prompt:
+        # Show only the opening lines of the system prompt — full text is huge
+        sp_first = (system_prompt.strip().split("\n", 3)[:2])
+        parts.append("[system] " + " / ".join(sp_first)[:160])
+    for m in messages[-3:]:  # last 3 messages
+        role = m.get("role", "?")
+        content = m.get("content", "")
+        if isinstance(content, list):
+            content = " ".join(b.get("text", "") for b in content if isinstance(b, dict))
+        text = (content or "").strip().replace("\n", " ")
+        if len(text) > 600:
+            text = text[:600] + "…"
+        parts.append(f"[{role}] {text}")
+    return "\n".join(parts)
+
+
 class ClaudeMixin:
     """Mixin providing Claude API interaction methods for agents."""
 
@@ -54,6 +120,12 @@ class ClaudeMixin:
         client = self.get_client(api_key)
         start = time.time()
 
+        # Emit a thought-stream event for the prompt (if this mixin is on a
+        # BaseAgent that has a bus / agent_id). Best-effort; silent on failure.
+        agent_id = getattr(self, "agent_id", "") or ""
+        if agent_id:
+            _emit_agent_thought(agent_id, "prompt", _summarise_messages(messages, system_prompt))
+
         try:
             response = await asyncio.to_thread(
                 client.messages.create,
@@ -78,6 +150,14 @@ class ClaudeMixin:
                 "model": model,
             }
 
+            if agent_id:
+                _emit_agent_thought(agent_id, "response", content[:1200], extra={
+                    "model": model,
+                    "input_tokens": result["input_tokens"],
+                    "output_tokens": result["output_tokens"],
+                    "duration_seconds": round(duration, 2),
+                })
+
             log.debug(
                 "claude_call_complete",
                 model=model,
@@ -88,6 +168,8 @@ class ClaudeMixin:
             return result
 
         except Exception as e:
+            if agent_id:
+                _emit_agent_thought(agent_id, "error", str(e)[:300])
             log.error("claude_call_failed", model=model, error=str(e))
             raise
 

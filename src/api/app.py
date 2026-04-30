@@ -45,6 +45,47 @@ connected_services: dict[str, dict] = {
 }
 websocket_clients: list[WebSocket] = []
 
+
+def _autodetect_connections() -> None:
+    """Inspect the loaded environment + persisted state and mark any credential-
+    backed services as connected so the Connectors page reflects reality on
+    page load instead of needing a manual Test Connection click."""
+    try:
+        from src.settings import Settings
+        from src.integrations.jira_oauth import is_connected as jira_oauth_is_connected, get_tokens as jira_oauth_tokens
+        s = Settings()
+
+        # Anthropic — present if WORK_AGENTS_ANTHROPIC_API_KEY or ANTHROPIC_API_KEY is set
+        import os as _os
+        has_anthropic = bool(s.anthropic.api_key) or bool(_os.environ.get("ANTHROPIC_API_KEY"))
+        if has_anthropic:
+            connected_services["anthropic"]["connected"] = True
+            if s.anthropic.api_key:
+                connected_services["anthropic"]["api_key"] = "***"  # presence only, never the real value
+            connected_services["anthropic"]["model"] = s.anthropic.default_model
+
+        # Jira — OAuth tokens persisted on disk?
+        if jira_oauth_is_connected():
+            t = jira_oauth_tokens()
+            connected_services["jira"]["connected"] = True
+            connected_services["jira"]["server_url"] = t.site_url if t else ""
+            connected_services["jira"]["email"] = ""
+        # Or basic-auth creds in env (legacy / non-SSO sites)
+        elif s.jira.server_url and s.jira.email and s.jira.api_token:
+            connected_services["jira"]["connected"] = True
+            connected_services["jira"]["server_url"] = s.jira.server_url
+            connected_services["jira"]["email"] = s.jira.email
+
+        # GitHub — token present in env?
+        if s.github.token:
+            connected_services["github"]["connected"] = True
+            connected_services["github"]["repo"] = s.github.repo
+    except Exception as e:
+        log.warning("autodetect_connections_failed", error=str(e)[:120])
+
+
+_autodetect_connections()
+
 # Agent definitions
 AGENTS = [
     {
@@ -58,6 +99,7 @@ AGENTS = [
         "total_cost": 0.0,
         "capabilities": ["requirements_analysis"],
         "model": "claude-haiku-4-5-20251001",
+        "current_task": "",
     },
     {
         "id": "pm",
@@ -70,6 +112,7 @@ AGENTS = [
         "total_cost": 0.0,
         "capabilities": ["planning"],
         "model": "claude-haiku-4-5-20251001",
+        "current_task": "",
     },
     {
         "id": "architect",
@@ -82,6 +125,7 @@ AGENTS = [
         "total_cost": 0.0,
         "capabilities": ["architecture"],
         "model": "claude-haiku-4-5-20251001",
+        "current_task": "",
     },
     {
         "id": "frontend",
@@ -94,6 +138,7 @@ AGENTS = [
         "total_cost": 0.0,
         "capabilities": ["frontend_code"],
         "model": "claude-haiku-4-5-20251001",
+        "current_task": "",
     },
     {
         "id": "backend",
@@ -106,6 +151,7 @@ AGENTS = [
         "total_cost": 0.0,
         "capabilities": ["backend_code"],
         "model": "claude-haiku-4-5-20251001",
+        "current_task": "",
     },
     {
         "id": "qa",
@@ -118,6 +164,7 @@ AGENTS = [
         "total_cost": 0.0,
         "capabilities": ["testing"],
         "model": "claude-haiku-4-5-20251001",
+        "current_task": "",
     },
     {
         "id": "devops",
@@ -130,6 +177,7 @@ AGENTS = [
         "total_cost": 0.0,
         "capabilities": ["devops"],
         "model": "claude-haiku-4-5-20251001",
+        "current_task": "",
     },
     {
         "id": "code_review",
@@ -142,6 +190,7 @@ AGENTS = [
         "total_cost": 0.0,
         "capabilities": ["code_review"],
         "model": "claude-haiku-4-5-20251001",
+        "current_task": "",
     },
 ]
 
@@ -193,6 +242,52 @@ async def broadcast_event(event_type: str, data: dict):
             disconnected.append(ws)
     for ws in disconnected:
         websocket_clients.remove(ws)
+
+
+# ---------------------------------------------------------------------------
+# Live agent-thought stream → WebSocket
+# ---------------------------------------------------------------------------
+# Subscribe to the in-process thought feed and rebroadcast every event over
+# the existing /ws WebSocket. Frontend chat panels listen for type="thought"
+# events keyed by agent_id and render each one as a chat bubble.
+
+# Keep recent thoughts in memory so a chat panel that opens AFTER an agent
+# has already started can replay the last N messages without losing context.
+agent_thoughts: dict[str, list[dict]] = {a["id"]: [] for a in AGENTS}
+_THOUGHT_BACKLOG = 50  # per-agent ring buffer
+
+def _on_agent_thought(payload: dict) -> None:
+    """Subscriber called by claude_mixin / bus on every agent activity.
+    Stores the payload in the per-agent backlog and broadcasts it to all
+    connected WebSocket clients."""
+    agent_id = payload.get("agent_id", "")
+    if not agent_id:
+        return
+    backlog = agent_thoughts.setdefault(agent_id, [])
+    backlog.append(payload)
+    if len(backlog) > _THOUGHT_BACKLOG:
+        del backlog[: len(backlog) - _THOUGHT_BACKLOG]
+    # Schedule the broadcast on the running event loop (callback is sync)
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.create_task(broadcast_event("agent_thought", payload))
+    except RuntimeError:
+        pass
+
+try:
+    from src.agents.claude_mixin import subscribe_to_thoughts as _sub_thoughts
+    _sub_thoughts(_on_agent_thought)
+except Exception as _e:
+    log.warning("thought_subscription_failed", error=str(_e))
+
+
+@app.get("/api/agents/{agent_id}/thoughts")
+async def get_agent_thoughts(agent_id: str):
+    """Return the recent thought-stream backlog for an agent.
+    Lets a chat panel that opens mid-pipeline replay the messages already
+    emitted by this agent before subscribing to live events."""
+    return agent_thoughts.get(agent_id, [])
 
 
 # ---------------------------------------------------------------------------
@@ -296,21 +391,27 @@ async def trigger_pipeline(req: TriggerPipelineRequest):
                     agent_id = data.get("agent_id", "")
                     if agent_id and agent_id not in run["agents_used"]:
                         run["agents_used"].append(agent_id)
-                    # Update agent status in AGENTS list
+                    # Update agent status in AGENTS list — also stash the
+                    # current task description so the dashboard speech bubble
+                    # can show what the agent is actually working on.
+                    task_desc = (data.get("task_description") or "")[:140]
                     for a in AGENTS:
                         if a["id"] == agent_id:
                             a["status"] = "busy"
+                            a["current_task"] = task_desc
                     run["events"].append({
                         "type": event_type,
                         "timestamp": run["updated_at"],
                         "message": f"{agent_id} started",
                         "agent_id": agent_id,
+                        "task_description": task_desc,
                     })
                 elif event_type == "agent_finished":
                     agent_id = data.get("agent_id", "")
                     for a in AGENTS:
                         if a["id"] == agent_id:
                             a["status"] = "idle"
+                            a["current_task"] = ""
                             a["total_runs"] += 1
                             if data.get("success"):
                                 a["successful_runs"] += 1
@@ -329,6 +430,7 @@ async def trigger_pipeline(req: TriggerPipelineRequest):
                 await broadcast_event(event_type, data)
 
             orchestrator.on_event(on_event)
+            run_started = datetime.now(timezone.utc)
             result = await orchestrator.run(req.ticket_key)
 
             run["status"] = "completed" if result.success else "failed"
@@ -337,6 +439,21 @@ async def trigger_pipeline(req: TriggerPipelineRequest):
                 {"id": a.get("id", ""), "artifact_type": a.get("artifact_type", ""), "name": a.get("name", ""), "agent_id": a.get("agent_id", ""), "phase": a.get("phase", "")}
                 for a in result.context.artifacts
             ]
+
+            # Pull token usage / cost from the underlying CrewOutput if available.
+            crew_out = getattr(result, "crew_output", None)
+            tu = getattr(crew_out, "token_usage", None) if crew_out else None
+            if tu is not None:
+                run["total_cost"] = round(getattr(tu, "total_cost_usd", 0.0) or 0.0, 4)
+                run["total_tokens"] = (
+                    int(getattr(tu, "total_input_tokens", 0) or 0)
+                    + int(getattr(tu, "total_output_tokens", 0) or 0)
+                )
+            run["duration_seconds"] = round(
+                (datetime.now(timezone.utc) - run_started).total_seconds(), 2
+            )
+            run["updated_at"] = datetime.now(timezone.utc).isoformat()
+
             await broadcast_event("pipeline_complete", {"run_id": run_id, "success": result.success})
 
         except Exception as e:

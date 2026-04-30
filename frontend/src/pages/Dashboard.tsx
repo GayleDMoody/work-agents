@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import IsometricOffice from '../components/IsometricOffice';
 import HUD from '../components/HUD';
 import ChatPopup from '../components/ChatPopup';
+import LiveAgentPanels from '../components/LiveAgentPanels';
 import { api } from '../api/client';
 import type { DashboardData, Agent } from '../types';
 
@@ -79,6 +80,9 @@ export default function Dashboard() {
     <div className="office-dashboard">
       <IsometricOffice agents={agents} onAgentClick={(id) => setChatAgent(id)} />
       <HUD data={dash} onTrigger={handleTrigger} />
+      {/* Live thought panels — auto-open per busy agent showing real-time
+          Claude prompts/responses + inter-agent messages. */}
+      <LiveAgentPanels agents={agents} />
       {chatAgent && (
         <ChatPopup agentId={chatAgent} onClose={() => setChatAgent(null)} />
       )}

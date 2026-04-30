@@ -61,6 +61,9 @@ export interface Agent {
   total_cost: number;
   capabilities: string[];
   model: string;
+  /** Short description of what the agent is currently working on,
+   *  populated by the orchestrator on agent_started. Empty when idle. */
+  current_task?: string;
 }
 
 export interface DashboardData {

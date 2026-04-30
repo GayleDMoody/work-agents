@@ -317,7 +317,14 @@ class Crew:
             log.info("task_starting", task_id=task.task_id, agent=agent.agent_id,
                      description=task.description[:80])
 
-            self._notify("task_started", {"task_id": task.task_id, "agent_id": agent.agent_id})
+            self._notify("task_started", {
+                "task_id": task.task_id,
+                "agent_id": agent.agent_id,
+                # Pass through a short version of the task description so the
+                # dashboard's busy speech bubble can show what's actually
+                # happening instead of a generic "Working..." text.
+                "task_description": (task.description or "").split("\n", 1)[0][:140],
+            })
 
             output = await agent.execute_task(task, context_str)
             outputs.append(output)
