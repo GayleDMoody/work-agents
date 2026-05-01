@@ -70,10 +70,10 @@ export default function Dashboard() {
   const agents = mergeAgents(agentsLive);
   const dash = dashboard ?? EMPTY_DASHBOARD;
 
-  async function handleTrigger(ticketKey: string) {
+  async function handleTrigger(ticketKey: string, repo?: { kind: 'local' | 'github'; id: string }) {
     if (!ticketKey.trim()) return;
     try {
-      await api.triggerPipeline(ticketKey.trim());
+      await api.triggerPipeline(ticketKey.trim(), repo);
     } catch (err) {
       console.error('Failed to trigger pipeline:', err);
     }

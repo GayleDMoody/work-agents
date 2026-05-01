@@ -47,6 +47,11 @@ class GitHubSettings(BaseSettings):
     oauth_client_secret: str = ""
     oauth_redirect_uri: str = "http://localhost:8000/api/github/oauth/callback"
 
+    # Optional: parent folder where the user already keeps cloned repos.
+    # Used by the dashboard's repo picker to discover local clones (faster +
+    # higher fidelity than fetching via API). Tilde is expanded.
+    local_repos_root: str = "~/moodys_home/github"
+
 
 class PipelineSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="WORK_AGENTS_PIPELINE_")

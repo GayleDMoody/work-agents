@@ -14,6 +14,14 @@ export interface Pipeline {
   duration_seconds: number;
   feedback_loops: number;
   approvals: Approval[];
+  // Repo target chosen at trigger time + PR info populated after publish
+  repo_kind?: 'local' | 'github' | '';
+  repo_id?: string;
+  repo_path?: string;
+  pr_url?: string;
+  pr_number?: number | null;
+  pr_branch?: string;
+  pr_repo?: string;
 }
 
 export interface Phase {

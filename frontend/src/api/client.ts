@@ -20,10 +20,13 @@ export const api = {
 
   getPipeline: (id: string) => fetchJSON<Pipeline>(`/pipelines/${id}`),
 
-  triggerPipeline: (ticketKey: string) =>
+  triggerPipeline: (ticketKey: string, repo?: { kind: 'local' | 'github'; id: string }) =>
     fetchJSON<Pipeline>('/pipelines/trigger', {
       method: 'POST',
-      body: JSON.stringify({ ticket_key: ticketKey }),
+      body: JSON.stringify({
+        ticket_key: ticketKey,
+        ...(repo ? { repo_kind: repo.kind, repo_id: repo.id } : {}),
+      }),
     }),
 
   getAgents: () => fetchJSON<Agent[]>('/agents'),
@@ -102,6 +105,36 @@ export const api = {
   getAgentThoughts: (agentId: string) =>
     fetchJSON<AgentThought[]>(`/agents/${encodeURIComponent(agentId)}/thoughts`),
 
+  // Local + GitHub repo discovery for the trigger flow
+  listLocalRepos: (root: string = '') =>
+    fetchJSON<{ root: string; repos: LocalRepoSummary[] }>(
+      `/local-repos${root ? `?root=${encodeURIComponent(root)}` : ''}`,
+    ),
+
+  listGitHubRepos: () =>
+    fetchJSON<GitHubRepoSummary[]>('/github/repos'),
+
+  publishPRLocal: (runId: string, body: {
+    repo_path: string;
+    base_branch?: string;
+    branch?: string;
+    pr_title?: string;
+    pr_body?: string;
+    push?: boolean;
+  }) =>
+    fetchJSON<{
+      branch: string;
+      commit_sha: string;
+      files_changed: string[];
+      pushed: boolean;
+      url?: string;
+      number?: number;
+      warning?: string;
+    }>(`/pipelines/${encodeURIComponent(runId)}/publish-pr-local`, {
+      method: 'POST',
+      body: JSON.stringify({ run_id: runId, ...body }),
+    }),
+
   // Notes board
   listNotes: (ticketKey?: string) =>
     fetchJSON<Note[]>(`/notes${ticketKey ? `?ticket_key=${encodeURIComponent(ticketKey)}` : ''}`),
@@ -153,3 +186,22 @@ export interface AgentThought {
 
 /** WebSocket URL for live pipeline events (agent_thought, agent_started, etc.). */
 export const WS_URL = BASE_URL.replace(/^http/, 'ws').replace(/\/api$/, '/ws');
+
+export interface LocalRepoSummary {
+  name: string;
+  path: string;
+  branch: string;
+  remote: string;
+  last_commit: string;
+  github_owner_repo: string;
+}
+
+export interface GitHubRepoSummary {
+  full_name: string;
+  description: string;
+  default_branch: string;
+  private: boolean;
+  language: string;
+  updated_at: string;
+  stargazers_count: number;
+}

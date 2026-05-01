@@ -251,6 +251,15 @@ class Crew:
         self._agent_map: dict[str, BaseAgent] = {a.agent_id: a for a in self.agents}
         self._bus: Any = None  # AgentBus, created on kickoff
         self._cost_tracker: CostTracker | None = None
+        # Optional repo-context block prepended to every agent's context. Set
+        # via set_repo_context(...) before run() is called so agents reason
+        # about real code instead of writing in a vacuum.
+        self._repo_context: str = ""
+
+    def set_repo_context(self, block: str) -> None:
+        """Inject a compact 'this is what the repo looks like' block that gets
+        prepended to every agent's task context this kickoff."""
+        self._repo_context = block or ""
 
     # ------------------------------------------------------------------
     # Public API — matches CrewAI
@@ -362,6 +371,11 @@ class Crew:
                 task.context = tasks[:i]
 
             context_str = task.get_context_str()
+
+            # Prepend the repo context (if the trigger picked one). Comes first
+            # so agents see the real codebase before any prior task output.
+            if self._repo_context:
+                context_str = self._repo_context + "\n\n" + context_str
 
             # Inject any inter-agent messages into context
             if self._bus:

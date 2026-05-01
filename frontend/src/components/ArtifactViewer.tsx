@@ -14,8 +14,9 @@
  * Codex / Claude Code "diff view" feel.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { X, FileText, Code, ListChecks, Eye, FilePlus2, FilePenLine, FileMinus2, Search, FileJson } from 'lucide-react';
+import { X, FileText, Code, ListChecks, Eye, FilePlus2, FilePenLine, FileMinus2, Search, FileJson, GitPullRequestArrow, ExternalLink, Loader2 } from 'lucide-react';
 import type { Artifact, ArtifactFile, Pipeline } from '../types';
+import { api } from '../api/client';
 
 interface Props {
   pipeline: Pipeline;
@@ -95,6 +96,43 @@ export default function ArtifactViewer({ pipeline, onClose }: Props) {
     f => !search || f.path.toLowerCase().includes(search.toLowerCase()),
   );
 
+  // Publish-PR state. Only meaningful when the run targeted a repo.
+  const [publishing, setPublishing] = useState(false);
+  const [publishError, setPublishError] = useState<string | null>(null);
+  const [publishedUrl, setPublishedUrl] = useState<string | null>(pipeline.pr_url || null);
+  const totalFiles = artifacts.reduce((n, a) => n + (a.files?.length || 0), 0);
+  const canPublish = (pipeline.repo_kind === 'local' || pipeline.repo_kind === 'github')
+    && totalFiles > 0
+    && pipeline.status !== 'running';
+
+  const handlePublish = async () => {
+    if (!canPublish) return;
+    setPublishing(true);
+    setPublishError(null);
+    try {
+      if (pipeline.repo_kind === 'local' && pipeline.repo_path) {
+        const res = await api.publishPRLocal(pipeline.id, {
+          repo_path: pipeline.repo_path,
+          push: true,
+        });
+        if (res.url) setPublishedUrl(res.url);
+        else if (!res.pushed) setPublishError(res.warning || 'Pushed locally but no PR URL returned');
+      } else if (pipeline.repo_kind === 'github' && pipeline.repo_id) {
+        const url = await fetch(`http://localhost:8000/api/pipelines/${encodeURIComponent(pipeline.id)}/publish-pr`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ run_id: pipeline.id, repo: pipeline.repo_id }),
+        }).then(r => r.json());
+        if (url.url) setPublishedUrl(url.url);
+        else setPublishError(url.detail || 'Failed to open PR');
+      }
+    } catch (e: unknown) {
+      setPublishError(e instanceof Error ? e.message : 'Publish failed');
+    } finally {
+      setPublishing(false);
+    }
+  };
+
   return (
     <div className="artifact-viewer-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="artifact-viewer">
@@ -103,12 +141,28 @@ export default function ArtifactViewer({ pipeline, onClose }: Props) {
             <div className="artifact-viewer-title">Artifacts — {pipeline.ticket_key}</div>
             <div className="artifact-viewer-sub">
               {artifacts.length} artifact{artifacts.length === 1 ? '' : 's'} · {pipeline.status} · ${(pipeline.total_cost ?? 0).toFixed(2)}
+              {totalFiles > 0 && <> · {totalFiles} file{totalFiles === 1 ? '' : 's'}</>}
+              {pipeline.repo_id && <> · repo: <code>{pipeline.repo_id}</code></>}
             </div>
           </div>
-          <button className="artifact-viewer-close" onClick={onClose} aria-label="Close">
-            <X size={18} />
-          </button>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {publishedUrl ? (
+              <a className="btn btn-outline" href={publishedUrl} target="_blank" rel="noopener noreferrer">
+                <ExternalLink size={14} /> View PR
+              </a>
+            ) : canPublish ? (
+              <button className="btn btn-primary" onClick={handlePublish} disabled={publishing}>
+                {publishing ? <><Loader2 size={14} className="spin" /> Publishing…</> : <><GitPullRequestArrow size={14} /> Publish as draft PR</>}
+              </button>
+            ) : null}
+            <button className="artifact-viewer-close" onClick={onClose} aria-label="Close">
+              <X size={18} />
+            </button>
+          </div>
         </div>
+        {publishError && (
+          <div className="alert error" style={{ margin: '0 18px 8px' }}>{publishError}</div>
+        )}
 
         <div className="artifact-viewer-body">
           {/* Left rail — artifact list grouped by type */}

@@ -1,18 +1,68 @@
-import { useState } from 'react';
-import { Play, Zap, DollarSign, Bot, Activity } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Play, Zap, DollarSign, Bot, Activity, Folder } from 'lucide-react';
 import type { DashboardData } from '../types';
+import { api, type LocalRepoSummary, type GitHubRepoSummary } from '../api/client';
 
 interface Props {
   data: DashboardData;
-  onTrigger: (ticketKey: string) => void;
+  onTrigger: (ticketKey: string, repo?: { kind: 'local' | 'github'; id: string }) => void;
+}
+
+interface RepoChoice {
+  key: string;             // unique key for the dropdown
+  label: string;           // display name
+  kind: 'local' | 'github';
+  id: string;              // repo_id on the backend (folder name or owner/repo)
+  hint?: string;           // small subtitle
 }
 
 export default function HUD({ data, onTrigger }: Props) {
   const [ticketKey, setTicketKey] = useState('');
+  const [repos, setRepos] = useState<RepoChoice[]>([]);
+  const [selectedRepoKey, setSelectedRepoKey] = useState<string>('');
+
+  // Discover available repos (local + GitHub) once on mount + every 30s
+  useEffect(() => {
+    let mounted = true;
+    const refresh = async () => {
+      const out: RepoChoice[] = [];
+      try {
+        const r = await api.listLocalRepos();
+        for (const lr of r.repos as LocalRepoSummary[]) {
+          out.push({
+            key: `local:${lr.path}`,
+            label: lr.name,
+            kind: 'local',
+            id: lr.name,
+            hint: lr.branch ? `local · ${lr.branch}` : 'local',
+          });
+        }
+      } catch { /* ignore */ }
+      try {
+        const gh = await api.listGitHubRepos();
+        for (const r of gh.slice(0, 30) as GitHubRepoSummary[]) {
+          out.push({
+            key: `github:${r.full_name}`,
+            label: r.full_name,
+            kind: 'github',
+            id: r.full_name,
+            hint: r.private ? 'github · private' : 'github · public',
+          });
+        }
+      } catch { /* ignore — likely not authenticated */ }
+      if (mounted) setRepos(out);
+    };
+    refresh();
+    const t = setInterval(refresh, 30_000);
+    return () => { mounted = false; clearInterval(t); };
+  }, []);
+
+  const selected = repos.find(r => r.key === selectedRepoKey);
 
   const handleTrigger = () => {
     if (!ticketKey.trim()) return;
-    onTrigger(ticketKey.trim());
+    const repo = selected ? { kind: selected.kind, id: selected.id } : undefined;
+    onTrigger(ticketKey.trim(), repo);
     setTicketKey('');
   };
 
@@ -51,10 +101,39 @@ export default function HUD({ data, onTrigger }: Props) {
               onChange={e => setTicketKey(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleTrigger()}
             />
+            <select
+              className="hud-input hud-repo-select"
+              value={selectedRepoKey}
+              onChange={e => setSelectedRepoKey(e.target.value)}
+              title={selected ? `${selected.kind}: ${selected.id}${selected.hint ? ' · ' + selected.hint : ''}` : 'Optional: pick a repo so agents work on real code'}
+            >
+              <option value="">— No repo (artifacts only) —</option>
+              {repos.length > 0 && (
+                <optgroup label="Local clones">
+                  {repos.filter(r => r.kind === 'local').map(r => (
+                    <option key={r.key} value={r.key}>{r.label}</option>
+                  ))}
+                </optgroup>
+              )}
+              {repos.some(r => r.kind === 'github') && (
+                <optgroup label="GitHub (OAuth)">
+                  {repos.filter(r => r.kind === 'github').map(r => (
+                    <option key={r.key} value={r.key}>{r.label}</option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
             <button className="hud-btn" onClick={handleTrigger} disabled={!ticketKey.trim()}>
               <Play size={14} /> Deploy
             </button>
           </div>
+          {selected && (
+            <div className="hud-repo-hint">
+              <Folder size={11} />
+              <span>{selected.kind === 'local' ? selected.id : selected.label}</span>
+              <span className="hud-repo-hint-sub">— agents will read this repo and propose changes</span>
+            </div>
+          )}
         </div>
       </div>
 

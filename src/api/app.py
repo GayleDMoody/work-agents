@@ -210,6 +210,13 @@ AGENTS = [
 
 class TriggerPipelineRequest(BaseModel):
     ticket_key: str
+    # Optional repo target — agents will receive a context bundle for this repo
+    # so they reason about real code instead of writing in a vacuum.
+    # repo_kind: "local" (folder under local_repos_root) or "github" (OAuth-fetched).
+    # repo_id: for "local" → folder name (e.g. "subscriptions-platform"); for
+    #         "github" → "owner/repo" full name.
+    repo_kind: str = ""
+    repo_id: str = ""
 
 
 class UpdateSettingsRequest(BaseModel):
@@ -379,6 +386,11 @@ async def trigger_pipeline(req: TriggerPipelineRequest):
         "duration_seconds": 0,
         "feedback_loops": 0,
         "approvals": [],
+        # Repo target chosen at trigger time, surfaced on the run record so
+        # the dashboard can show "View PR" with the right link.
+        "repo_kind": req.repo_kind or "",
+        "repo_id": req.repo_id or "",
+        "repo_path": "",
     }
 
     pipeline_runs[run_id] = run
@@ -439,6 +451,16 @@ async def trigger_pipeline(req: TriggerPipelineRequest):
 
             orchestrator.on_event(on_event)
             run_started = datetime.now(timezone.utc)
+
+            # Build a repo-context block (file tree + relevant existing files)
+            # if the trigger picked one. This gets prepended to every agent's
+            # task context so they reason about real code, not in a vacuum.
+            repo_context_block = await _build_repo_context_block(
+                run, req.repo_kind, req.repo_id,
+            )
+            if repo_context_block:
+                orchestrator.set_repo_context(repo_context_block)
+
             result = await orchestrator.run(req.ticket_key)
 
             run["status"] = "completed" if result.success else "failed"
@@ -1042,6 +1064,403 @@ async def github_oauth_disconnect():
     disconnect()
     connected_services["github"]["connected"] = False
     return {"status": "disconnected"}
+
+
+# ---------------------------------------------------------------------------
+# GitHub repository data — lists user's repos, pulls a context bundle for the
+# agent pipeline, and applies agent output as a real branch + PR.
+# ---------------------------------------------------------------------------
+
+def _require_github_token() -> str:
+    """Get the OAuth access token, raising a clean 401 if not connected."""
+    from src.integrations.github_oauth import get_tokens
+    t = get_tokens()
+    if not t or not t.access_token:
+        raise HTTPException(status_code=401, detail="GitHub OAuth not connected. Visit Connectors.")
+    return t.access_token
+
+
+@app.get("/api/github/repos")
+async def list_github_repos():
+    """Return the authenticated user's accessible repos for the trigger picker."""
+    token = _require_github_token()
+    from src.integrations import github_rest
+    repos = await github_rest.list_user_repos(token)
+    return [
+        {
+            "full_name": r.full_name,
+            "description": r.description,
+            "default_branch": r.default_branch,
+            "private": r.private,
+            "language": r.language,
+            "updated_at": r.updated_at,
+            "stargazers_count": r.stargazers_count,
+        }
+        for r in repos
+    ]
+
+
+@app.get("/api/github/repos/{owner}/{repo}/context")
+async def get_repo_context_endpoint(owner: str, repo: str, hints: str = ""):
+    """Build a compact repo context (file tree + relevant files) for agents.
+
+    hints is a comma-separated list of search substrings — usually derived from
+    the Jira ticket title/description so we pick the files most likely relevant.
+    """
+    token = _require_github_token()
+    from src.integrations import github_rest
+    hint_list = [h.strip() for h in hints.split(",") if h.strip()]
+    ctx = await github_rest.build_repo_context(token, f"{owner}/{repo}", hints=hint_list)
+    return {
+        "full_name": ctx.full_name,
+        "default_branch": ctx.default_branch,
+        "description": ctx.description,
+        "file_tree_count": len(ctx.file_tree),
+        "file_tree_sample": ctx.file_tree[:60],
+        "relevant_files": ctx.relevant_files,
+        "readme_excerpt": ctx.readme[:1500],
+        "stack_hints": ctx.stack_hints,
+    }
+
+
+class PublishPRRequest(BaseModel):
+    run_id: str
+    repo: str  # "owner/repo"
+    base_branch: str = ""  # blank → use repo default
+    branch: str = ""       # blank → "work-agents/{ticket_key}"
+    pr_title: str = ""     # blank → "[Agents] {ticket_key}: {first artifact name}"
+    pr_body: str = ""      # blank → auto-generated summary
+
+
+@app.post("/api/pipelines/{run_id}/publish-pr")
+async def publish_pr(run_id: str, req: PublishPRRequest):
+    """Apply the agent-produced files from a completed run to GitHub as a draft PR.
+
+    For each `files[]` entry across all artifacts:
+      - create   → PUT /contents/{path} with no sha
+      - modify   → fetch existing sha, then PUT /contents/{path} with sha
+      - delete   → DELETE /contents/{path}
+
+    All writes happen on a fresh branch off the base. PR is opened as draft.
+    """
+    if run_id not in pipeline_runs:
+        raise HTTPException(status_code=404, detail="run_not_found")
+    run = pipeline_runs[run_id]
+    if run.get("status") not in ("completed", "failed"):
+        raise HTTPException(status_code=400, detail="run_still_in_progress")
+
+    token = _require_github_token()
+    from src.integrations import github_rest
+    full_name = req.repo
+
+    # Resolve defaults
+    repo_meta = await github_rest.get_repo(token, full_name)
+    base_branch = req.base_branch or repo_meta.get("default_branch") or "main"
+    branch = req.branch or f"work-agents/{run.get('ticket_key', run_id)}"
+    pr_title = req.pr_title or f"[Agents] {run.get('ticket_key', run_id)}"
+    pr_body = req.pr_body or _build_pr_body(run)
+
+    # Collect every file across every artifact, deduping by path (later writes win)
+    all_files: dict[str, dict[str, Any]] = {}
+    for art in run.get("artifacts") or []:
+        for f in (art.get("files") or []):
+            path = f.get("path")
+            if not path:
+                continue
+            all_files[path] = {
+                "path": path,
+                "action": f.get("action", "create"),
+                "content": f.get("content", ""),
+                "agent": art.get("agent_id", ""),
+            }
+    if not all_files:
+        raise HTTPException(status_code=400, detail="no_files_to_publish")
+
+    # Make the branch
+    await github_rest.create_branch(token, full_name, new_branch=branch, from_branch=base_branch)
+
+    # Apply each file. Look up existing sha for modify/delete operations.
+    written: list[str] = []
+    for path, f in all_files.items():
+        existing = await github_rest.read_file(token, full_name, path, ref=branch)
+        existing_sha = existing.get("sha") if not existing.get("missing") else None
+        msg = f"{f['agent']}: {f['action']} {path}"
+        if f["action"] == "delete" and existing_sha:
+            await github_rest.delete_file(token, full_name, path=path, branch=branch, message=msg, existing_sha=existing_sha)
+        else:
+            await github_rest.put_file(
+                token, full_name, path=path, content=f["content"], branch=branch,
+                message=msg, existing_sha=existing_sha,
+            )
+        written.append(path)
+
+    # Open the PR (draft)
+    pr = await github_rest.open_pull_request(
+        token, full_name,
+        title=pr_title, body=pr_body, head=branch, base=base_branch, draft=True,
+    )
+
+    # Stash on the run record so the dashboard can show "View PR"
+    run["pr_url"] = pr.get("html_url")
+    run["pr_number"] = pr.get("number")
+    run["pr_branch"] = branch
+    run["pr_repo"] = full_name
+    return {
+        "url": pr.get("html_url"),
+        "number": pr.get("number"),
+        "branch": branch,
+        "files_written": written,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Local-clone repos (alternative to fetching via GitHub API)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/local-repos")
+async def list_local_repos_endpoint(root: str = ""):
+    """List git repos under `root` (or settings default if not provided).
+
+    Each entry: {name, path, branch, remote, last_commit, github_owner_repo}.
+    """
+    from src.integrations import local_repo
+    from src.settings import Settings
+    s = Settings()
+    actual_root = root or s.github.local_repos_root
+    repos = local_repo.list_local_repos(actual_root)
+    out = []
+    for r in repos:
+        gh = local_repo.parse_github_owner_repo(r.remote)
+        out.append({
+            "name": r.name,
+            "path": r.path,
+            "branch": r.branch,
+            "remote": r.remote,
+            "last_commit": r.last_commit,
+            "github_owner_repo": f"{gh[0]}/{gh[1]}" if gh else "",
+        })
+    return {"root": actual_root, "repos": out}
+
+
+class PublishPRLocalRequest(BaseModel):
+    run_id: str
+    repo_path: str        # absolute path on disk
+    base_branch: str = ""  # blank → current branch
+    branch: str = ""       # blank → "work-agents/{ticket_key}"
+    pr_title: str = ""
+    pr_body: str = ""
+    push: bool = True
+
+
+@app.post("/api/pipelines/{run_id}/publish-pr-local")
+async def publish_pr_local(run_id: str, req: PublishPRLocalRequest):
+    """Apply the run's agent-produced files to a LOCAL git clone, commit, and
+    push to origin via the user's OAuth token. Then open a draft PR if the
+    remote points at github.com."""
+    if run_id not in pipeline_runs:
+        raise HTTPException(status_code=404, detail="run_not_found")
+    run = pipeline_runs[run_id]
+    if run.get("status") not in ("completed", "failed"):
+        raise HTTPException(status_code=400, detail="run_still_in_progress")
+
+    from src.integrations import local_repo, github_oauth, github_rest
+
+    # Collect all files from artifacts (later writes win on dup paths)
+    all_files: dict[str, dict[str, Any]] = {}
+    for art in run.get("artifacts") or []:
+        for f in (art.get("files") or []):
+            path = f.get("path")
+            if not path:
+                continue
+            all_files[path] = {
+                "path": path,
+                "action": f.get("action", "create"),
+                "content": f.get("content", ""),
+            }
+    if not all_files:
+        raise HTTPException(status_code=400, detail="no_files_to_publish")
+
+    branch = req.branch or f"work-agents/{run.get('ticket_key', run_id)}"
+    commit_msg = f"agents: {run.get('ticket_key', run_id)} — {req.pr_title or 'Work Agents pipeline output'}"
+
+    # Pull GitHub token if connected (used to push without prompting)
+    gh_token = ""
+    tokens = github_oauth.get_tokens()
+    if tokens:
+        gh_token = tokens.access_token
+
+    result = local_repo.apply_files_to_local(
+        req.repo_path,
+        files=list(all_files.values()),
+        branch=branch,
+        commit_message=commit_msg,
+        base_branch=req.base_branch,
+        push=req.push,
+        github_token=gh_token,
+    )
+    if result.error and not result.commit_sha:
+        raise HTTPException(status_code=400, detail=f"apply_failed: {result.error}")
+
+    pr_url = ""
+    pr_number: int | None = None
+    # Open a draft PR if we pushed AND we can identify the github owner/repo
+    if result.pushed and gh_token:
+        try:
+            from pathlib import Path as _P
+            # Re-derive owner/repo from the local clone's remote
+            remote = local_repo._git(_P(req.repo_path).expanduser(), "remote", "get-url", "origin") or ""
+            gh = local_repo.parse_github_owner_repo(remote)
+            if gh:
+                full_name = f"{gh[0]}/{gh[1]}"
+                # Use the run's base branch if not given
+                base = req.base_branch
+                if not base:
+                    repo_meta = await github_rest.get_repo(gh_token, full_name)
+                    base = repo_meta.get("default_branch") or "main"
+                pr = await github_rest.open_pull_request(
+                    gh_token, full_name,
+                    title=req.pr_title or f"[Agents] {run.get('ticket_key', run_id)}",
+                    body=req.pr_body or _build_pr_body(run),
+                    head=branch, base=base, draft=True,
+                )
+                pr_url = pr.get("html_url", "") or ""
+                pr_number = pr.get("number")
+        except Exception as e:
+            log.warning("pr_open_failed", error=str(e)[:200])
+
+    run["pr_url"] = pr_url
+    run["pr_number"] = pr_number
+    run["pr_branch"] = branch
+    run["pr_repo"] = req.repo_path
+
+    return {
+        "branch": result.branch,
+        "commit_sha": result.commit_sha,
+        "files_changed": result.files_changed,
+        "pushed": result.pushed,
+        "url": pr_url,
+        "number": pr_number,
+        "warning": result.error or "",
+    }
+
+
+async def _build_repo_context_block(run: dict[str, Any], kind: str, repo_id: str) -> str:
+    """Build a repo-context blob to prepend to each agent's task context.
+
+    For local repos: `kind="local"`, `repo_id` is the folder name under
+    settings.github.local_repos_root (or an absolute path).
+    For remote repos: `kind="github"`, `repo_id` is "owner/repo".
+    """
+    if not kind or not repo_id:
+        return ""
+    try:
+        if kind == "local":
+            from src.integrations import local_repo
+            from src.settings import Settings
+            from pathlib import Path
+            s = Settings()
+            # Accept either folder name (relative to root) or absolute path
+            p = Path(repo_id).expanduser()
+            if not p.is_absolute() or not p.exists():
+                p = (Path(s.github.local_repos_root).expanduser() / repo_id)
+            run["repo_path"] = str(p)
+            ctx = local_repo.build_repo_context(
+                str(p),
+                hints=_extract_hints_from_ticket(run.get("ticket_key", "")),
+            )
+            run["repo_kind"] = "local"
+            run["repo_id"] = repo_id
+            return _format_repo_context(
+                name=ctx.name, branch=ctx.branch, remote=ctx.remote,
+                file_tree=ctx.file_tree, relevant_files=ctx.relevant_files,
+                readme=ctx.readme, stack_hints=ctx.stack_hints,
+            )
+
+        if kind == "github":
+            token = _require_github_token()
+            from src.integrations import github_rest
+            ctx = await github_rest.build_repo_context(
+                token, repo_id,
+                hints=_extract_hints_from_ticket(run.get("ticket_key", "")),
+            )
+            return _format_repo_context(
+                name=ctx.full_name, branch=ctx.default_branch, remote=f"https://github.com/{ctx.full_name}.git",
+                file_tree=ctx.file_tree, relevant_files=ctx.relevant_files,
+                readme=ctx.readme, stack_hints=ctx.stack_hints,
+            )
+    except Exception as e:
+        log.warning("repo_context_build_failed", kind=kind, repo_id=repo_id, error=str(e)[:200])
+    return ""
+
+
+def _extract_hints_from_ticket(ticket_key: str) -> list[str]:
+    """Best-effort extraction of probable code-area hints from a ticket title /
+    description. Pulls capitalised words, file-extensions-style identifiers,
+    and obvious component names. The hits are used to pick which existing
+    files to include verbatim in the agent context."""
+    import re
+    # First check if we already fetched the ticket and stored it on a run
+    summary_blob = ticket_key + " "
+    for r in pipeline_runs.values():
+        if r.get("ticket_key") == ticket_key:
+            for e in r.get("events") or []:
+                msg = e.get("message") or ""
+                if msg:
+                    summary_blob += " " + msg
+    # Pull CamelCase identifiers (common React component / class names)
+    camels = re.findall(r"\b[A-Z][a-z]+(?:[A-Z][a-z]+){1,5}\b", summary_blob)
+    # Pull strings inside backticks / quotes
+    quoted = re.findall(r"[`'\"]([A-Za-z0-9_./-]{3,40})[`'\"]", summary_blob)
+    return list({*camels, *quoted})[:8]
+
+
+def _format_repo_context(
+    *, name: str, branch: str, remote: str,
+    file_tree: list[str], relevant_files: dict[str, str], readme: str, stack_hints: list[str],
+) -> str:
+    """Render a compact text block agents can include in their context."""
+    lines = ["## Target repository", f"- name: {name}", f"- branch: {branch}", f"- remote: {remote}"]
+    if stack_hints:
+        lines.append(f"- stack files present: {', '.join(stack_hints)}")
+    if readme:
+        lines.append("\n### README excerpt")
+        lines.append(readme)
+    if file_tree:
+        lines.append(f"\n### File tree ({len(file_tree)} entries — first 200 shown)")
+        lines.append("\n".join(file_tree[:200]))
+    if relevant_files:
+        lines.append(f"\n### Relevant existing files ({len(relevant_files)})")
+        for path, content in relevant_files.items():
+            lines.append(f"\n#### {path}\n```\n{content}\n```")
+    lines.append("\n## Instructions for using this context")
+    lines.append("- Use the actual file paths shown above when proposing changes.")
+    lines.append("- Match the existing code style, imports, and patterns visible in 'Relevant existing files'.")
+    lines.append("- For new files, place them in the same directory layout as the existing code.")
+    return "\n".join(lines)
+
+
+def _build_pr_body(run: dict[str, Any]) -> str:
+    """Generate a human-readable PR body summarising the agent pipeline run."""
+    lines: list[str] = []
+    lines.append(f"Generated by the Work Agents pipeline for **{run.get('ticket_key', '?')}**.\n")
+    if run.get("agents_used"):
+        lines.append("**Agents that ran:** " + ", ".join(run["agents_used"]))
+    lines.append(f"**Duration:** {run.get('duration_seconds', 0)}s · **Tokens:** {run.get('total_tokens', 0)} · **Cost:** ${run.get('total_cost', 0)}")
+    lines.append("")
+    lines.append("## Artifacts")
+    for art in run.get("artifacts") or []:
+        agent = art.get("agent_id", "?")
+        files = art.get("files") or []
+        if files:
+            lines.append(f"- **{agent}** — {len(files)} file(s):")
+            for f in files:
+                lines.append(f"    - `{f.get('action','?')}` `{f.get('path','')}`")
+        else:
+            lines.append(f"- **{agent}** — {art.get('artifact_type', '?')} ({len(art.get('raw') or '')} chars)")
+    lines.append("")
+    lines.append("---")
+    lines.append("> ⚠️ This is a **draft** PR opened automatically. Review carefully before marking ready / merging.")
+    return "\n".join(lines)
 
 
 @app.get("/api/jira/ticket/{ticket_key}")

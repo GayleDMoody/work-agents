@@ -1298,6 +1298,22 @@ tr:hover td { background: var(--bg-hover); }
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
 
+/* --- Repo picker in the trigger HUD --- */
+.hud-repo-select {
+  min-width: 180px;
+  max-width: 240px;
+  font-size: 12px;
+  padding: 6px 10px;
+  appearance: auto;
+}
+.hud-repo-hint {
+  display: flex; gap: 6px; align-items: center;
+  font-size: 11px; color: var(--text-muted);
+  padding: 4px 12px 0;
+}
+.hud-repo-hint > span:first-of-type { color: var(--accent); font-weight: 600; }
+.hud-repo-hint-sub { color: var(--text-muted); }
+
 /* --- Notes board --- */
 .notes-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
 .notes-list { display: flex; flex-direction: column; gap: 14px; max-width: 880px; }
