@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import IsometricOffice from '../components/IsometricOffice';
 import HUD from '../components/HUD';
 import ChatPopup from '../components/ChatPopup';
-import LiveAgentPanels from '../components/LiveAgentPanels';
+import AgentStatusSidebar from '../components/AgentStatusSidebar';
 import ArtifactViewer from '../components/ArtifactViewer';
 import { Code as CodeIcon } from 'lucide-react';
 import { api } from '../api/client';
@@ -92,9 +92,8 @@ export default function Dashboard() {
     <div className="office-dashboard">
       <IsometricOffice agents={agents} onAgentClick={(id) => setChatAgent(id)} />
       <HUD data={dash} onTrigger={handleTrigger} />
-      {/* Live thought panels — auto-open per busy agent showing real-time
-          Claude prompts/responses + inter-agent messages. */}
-      <LiveAgentPanels agents={agents} />
+      {/* Persistent right sidebar showing every agent's live status + formatted thought stream */}
+      <AgentStatusSidebar agents={agents} />
       {/* Quick "view artifacts" button — appears only when at least one
           recent run has artifacts to show. */}
       {latestRunWithArtifacts && (
