@@ -1239,11 +1239,16 @@ tr:hover td { background: var(--bg-hover); }
   border-radius: 8px;
   overflow: hidden;
   transition: border-color .2s;
-  /* Critical: allow the card to shrink horizontally inside the sidebar's
-     flex column. Without min-width:0 the long file paths inside JsonProse
-     would force the card wider than the sidebar. */
+  /* Critical: allow the card to shrink horizontally inside the sidebars
+     flex column (without min-width:0 long file paths force the card
+     wider). But DO NOT shrink vertically — the default flex-shrink:1
+     squashes tall expanded cards down to fit the parent, hiding the
+     body content past the squashed height (combined with overflow:hidden
+     above). flex-shrink:0 lets each card grow to its natural height and
+     lets the outer .agent-sidebar-body scroll to reach the content. */
   min-width: 0;
   max-width: 100%;
+  flex-shrink: 0;
 }
 .agent-card--busy  { box-shadow: 0 0 0 1px rgba(63,185,80,0.18); }
 .agent-card--error { border-left-color: var(--danger) !important; }
