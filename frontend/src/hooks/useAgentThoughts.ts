@@ -7,6 +7,8 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { api, WS_URL, type AgentThought } from '../api/client';
+// `api` is already imported above; the replay path below uses
+// api.getAgentThoughts to seed each agent's backlog on mount.
 
 interface ThoughtsState {
   /** Per-agent backlog. Newest at the end. Capped to MAX_PER_AGENT. */
@@ -19,6 +21,10 @@ interface ThoughtsState {
    *  interval, so state transitions would otherwise be missed. */
   startedAgents: Set<string>;
 }
+
+/** Canonical pipeline order — also the order we replay backlog for so the
+ *  sidebar's per-agent thoughts populate predictably after a page reload. */
+const KNOWN_AGENT_IDS = ['product', 'pm', 'architect', 'backend', 'frontend', 'devops', 'qa', 'code_review'];
 
 const MAX_PER_AGENT = 80;
 
@@ -48,6 +54,35 @@ export function useAgentThoughts(): ThoughtsState {
   useEffect(() => {
     let cancelled = false;
     let reconnectTimer: number | undefined;
+
+    // Replay any backlog stored on the backend so a fresh page-load shows
+    // the previous runs' messages instead of an empty sidebar. Each agent's
+    // backlog is capped to ~50 entries server-side. We merge by replacing
+    // the per-agent slice (the WebSocket will keep adding new ones).
+    (async () => {
+      const fetched = await Promise.all(
+        KNOWN_AGENT_IDS.map(async id => {
+          try {
+            const list = await api.getAgentThoughts(id);
+            return [id, list] as const;
+          } catch {
+            return [id, [] as AgentThought[]] as const;
+          }
+        }),
+      );
+      if (cancelled) return;
+      setState(prev => {
+        const next: Record<string, AgentThought[]> = { ...prev.byAgent };
+        const started = new Set(prev.startedAgents);
+        for (const [id, list] of fetched) {
+          if (list && list.length > 0) {
+            next[id] = list.slice(-MAX_PER_AGENT);
+            started.add(id);
+          }
+        }
+        return { ...prev, byAgent: next, startedAgents: started };
+      });
+    })();
 
     const connect = () => {
       try {
