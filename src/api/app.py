@@ -529,8 +529,13 @@ async def trigger_pipeline(req: TriggerPipelineRequest):
             run["status"] = "completed" if result.success else "failed"
             run["current_phase"] = result.context.current_phase.value
             # Keep the full enriched artifact (including files / json_dict / raw)
-            # so the code viewer can render the agent's actual output.
-            run["artifacts"] = list(result.context.artifacts)
+            # so the code viewer can render the agent's actual output. Preserve
+            # any pre-pipeline artifacts (e.g. the investigator dossier added
+            # before kickoff) by prepending them.
+            preserved = [a for a in (run.get("artifacts") or [])
+                         if a.get("agent_id") == "investigator"
+                         or a.get("artifact_type") == "investigation"]
+            run["artifacts"] = preserved + list(result.context.artifacts)
 
             # Pull token usage / cost from the underlying CrewOutput if available.
             crew_out = getattr(result, "crew_output", None)
