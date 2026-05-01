@@ -1215,9 +1215,11 @@ tr:hover td { background: var(--bg-hover); }
 .agent-sidebar-conn.off { color: #d29922; background: rgba(210,153,34,0.10); }
 
 .agent-sidebar-body {
-  flex: 1; min-height: 0;
+  flex: 1; min-height: 0; min-width: 0;
   overflow-y: auto;
-  padding: 8px;
+  /* Generous bottom padding so the last card has air below it and isn't
+     hidden under a bottom shadow / status bar */
+  padding: 8px 8px 80px;
   display: flex; flex-direction: column; gap: 6px;
 }
 
@@ -1237,6 +1239,11 @@ tr:hover td { background: var(--bg-hover); }
   border-radius: 8px;
   overflow: hidden;
   transition: border-color .2s;
+  /* Critical: allow the card to shrink horizontally inside the sidebar's
+     flex column. Without min-width:0 the long file paths inside JsonProse
+     would force the card wider than the sidebar. */
+  min-width: 0;
+  max-width: 100%;
 }
 .agent-card--busy  { box-shadow: 0 0 0 1px rgba(63,185,80,0.18); }
 .agent-card--error { border-left-color: var(--danger) !important; }
@@ -1286,6 +1293,8 @@ tr:hover td { background: var(--bg-hover); }
      reachable without nested scrollbars. */
   padding: 8px;
   display: flex; flex-direction: column; gap: 6px;
+  min-width: 0;
+  overflow-x: hidden;  /* belt-and-suspenders against any too-wide child */
 }
 .agent-card-empty {
   font-size: 11px; color: var(--text-muted);
@@ -1298,7 +1307,11 @@ tr:hover td { background: var(--bg-hover); }
   border: 1px solid rgba(255,255,255,0.03);
   border-radius: 6px;
   padding: 6px 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
+.thought-body { min-width: 0; overflow: hidden; }
 .thought--prompt   { border-left: 2px solid rgba(88,166,255,0.5); }
 .thought--response { border-left: 2px solid rgba(63,185,80,0.5); }
 .thought--error    { border-left: 2px solid rgba(248,81,73,0.7); background: rgba(248,81,73,0.04); }
@@ -1345,23 +1358,55 @@ tr:hover td { background: var(--bg-hover); }
   font-size: 12px;
   line-height: 1.55;
   display: flex; flex-direction: column; gap: 6px;
+  min-width: 0;
+  /* word-break + overflow-wrap so long file paths and identifiers wrap to a
+     new line instead of forcing the parent flex column to expand past the
+     sidebar's right edge. */
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 .ft-prose-headline {
   font-size: 12.5px;
   line-height: 1.5;
   color: var(--text-primary);
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
-.ft-prose-section { margin-top: 2px; }
-.ft-prose-line, .ft-prose-line--nested { color: var(--text-secondary); }
-.ft-prose-line code { font-size: 11px; padding: 1px 5px; background: rgba(255,255,255,0.05); border-radius: 3px; }
+.ft-prose-section { margin-top: 2px; min-width: 0; }
+.ft-prose-line, .ft-prose-line--nested {
+  color: var(--text-secondary);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.ft-prose-line code,
+.ft-prose-list code {
+  font-size: 10.5px;
+  padding: 1px 5px;
+  background: rgba(255,255,255,0.05);
+  border-radius: 3px;
+  /* Allow long paths/identifiers to wrap mid-word instead of clipping */
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  display: inline;
+  max-width: 100%;
+}
 .ft-prose-label {
   font-weight: 700; color: #79c0ff;
   text-transform: capitalize; margin-right: 4px;
 }
 .ft-prose-meta { color: var(--text-muted); font-style: italic; }
-.ft-prose-list { padding-left: 16px; margin: 4px 0 0; display: flex; flex-direction: column; gap: 3px; }
-.ft-prose-list li { color: var(--text-secondary); font-size: 11.5px; line-height: 1.5; }
-.ft-prose-list code { font-size: 10.5px; padding: 1px 4px; background: rgba(255,255,255,0.05); border-radius: 3px; }
+.ft-prose-list {
+  padding-left: 16px; margin: 4px 0 0;
+  display: flex; flex-direction: column; gap: 3px;
+  min-width: 0;
+}
+.ft-prose-list li {
+  color: var(--text-secondary);
+  font-size: 11.5px; line-height: 1.5;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
 .ft-prose-more { color: var(--text-muted); font-style: italic; }
 
 .ft-prose-pill {
@@ -1390,15 +1435,36 @@ tr:hover td { background: var(--bg-hover); }
 .ft-details[open] .ft-details-summary { color: var(--accent); margin-bottom: 6px; }
 
 /* JSON tree */
-.ft-json { font-size: 11px; line-height: 1.55; }
-.ft-node, .ft-leaf { padding-left: 0; }
+.ft-json {
+  font-size: 11px; line-height: 1.55;
+  min-width: 0;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.ft-node, .ft-leaf {
+  padding-left: 0;
+  min-width: 0;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
 .ft-node-header {
-  display: flex; align-items: center; gap: 4px;
+  display: flex; align-items: flex-start; gap: 4px;
   cursor: pointer; user-select: none;
   padding: 1px 2px; border-radius: 3px;
+  min-width: 0;
+  flex-wrap: wrap;
 }
 .ft-node-header:hover { background: rgba(255,255,255,0.04); }
-.ft-children { padding-left: 14px; border-left: 1px dashed rgba(255,255,255,0.06); margin-left: 4px; }
+.ft-children {
+  padding-left: 14px;
+  border-left: 1px dashed rgba(255,255,255,0.06);
+  margin-left: 4px;
+  min-width: 0;
+}
+.ft-str, .ft-num, .ft-bool, .ft-null {
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
 .ft-bracket-close { padding-left: 4px; }
 .ft-key     { color: #79c0ff; }
 .ft-key::after { content: ''; }
