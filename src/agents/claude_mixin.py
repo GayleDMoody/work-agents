@@ -151,11 +151,10 @@ class ClaudeMixin:
             }
 
             if agent_id:
-                # Cap responses at 12 000 chars — enough to keep JSON intact for
-                # the dashboard's tree renderer (was 1200 before, which truncated
-                # most agent outputs mid-object and turned them into raw-text
-                # fallback).
-                _emit_agent_thought(agent_id, "response", content[:12000], extra={
+                # Cap responses at 40 000 chars. Most agent JSON fits within
+                # this; for outputs that exceed it the frontend's
+                # parseJsonForgiving + tryRepairJson can salvage the prefix.
+                _emit_agent_thought(agent_id, "response", content[:40000], extra={
                     "model": model,
                     "input_tokens": result["input_tokens"],
                     "output_tokens": result["output_tokens"],

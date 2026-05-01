@@ -248,9 +248,10 @@ function clip(s: string, max = 70): string {
 }
 
 function tryExtractJson(text: string): unknown | null {
-  // Strip surrounding markdown fences first
-  const fenced = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-  const candidate = fenced ? fenced[1] : text;
+  // Strip surrounding markdown fences first (handles unclosed fences too)
+  const fencedFull = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+  const fencedOpen = !fencedFull && text.match(/```(?:json)?\s*\n?([\s\S]*)$/);
+  const candidate = fencedFull ? fencedFull[1] : (fencedOpen ? fencedOpen[1] : text);
   // Find the first { or [
   const firstBrace = Math.min(
     ...['{', '['].map(c => {
@@ -259,25 +260,52 @@ function tryExtractJson(text: string): unknown | null {
     }),
   );
   if (firstBrace === Infinity) return null;
-  // Try parsing progressively shorter slices in case the content was truncated
-  // mid-object (we cap at 12 KB on the backend).
   const start = candidate.slice(firstBrace);
-  for (const end of [start.length, ...findCloseCandidates(start)]) {
-    try {
-      return JSON.parse(start.slice(0, end));
-    } catch { /* try next */ }
+
+  // 1. Direct parse
+  try { return JSON.parse(start); } catch { /* fall through */ }
+
+  // 2. Try every prefix that closes a top-level object/array
+  for (const end of findCloseCandidates(start)) {
+    try { return JSON.parse(start.slice(0, end)); } catch { /* next */ }
+  }
+
+  // 3. Repair: balance unclosed quotes/brackets, strip a partial trailing
+  //    entry, and try parsing the syntactically-completed string. Same
+  //    strategy as FormattedThought.tryRepairJson — kept inline to avoid
+  //    a cross-component import.
+  let inStr = false, escape = false;
+  const stack: ('O' | 'A')[] = [];
+  for (let i = 0; i < start.length; i++) {
+    const c = start[i];
+    if (escape) { escape = false; continue; }
+    if (c === '\\') { escape = true; continue; }
+    if (c === '"')  { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (c === '{') stack.push('O');
+    else if (c === '[') stack.push('A');
+    else if (c === '}' || c === ']') stack.pop();
+  }
+  if (stack.length > 0 || inStr) {
+    let r = start;
+    if (escape) r = r.slice(0, -1);
+    if (inStr) r += '"';
+    r = r.replace(/[\s,]+$/, '');
+    for (let attempt = 0; attempt < 4; attempt++) {
+      let candidate = r;
+      for (let i = stack.length - 1; i >= 0; i--) candidate += stack[i] === 'O' ? '}' : ']';
+      try { return JSON.parse(candidate); } catch { /* trim and retry */ }
+      const cut = Math.max(r.lastIndexOf(','), r.lastIndexOf('['), r.lastIndexOf('{'));
+      if (cut <= 0) break;
+      r = r.slice(0, cut).replace(/[\s,]+$/, '');
+    }
   }
   return null;
 }
 
 function findCloseCandidates(s: string): number[] {
-  // Walk the string and emit candidate end-indexes at every position where
-  // we've just closed a top-level object/array. Lets us salvage truncated
-  // JSON by parsing only the prefix that's syntactically complete.
   const out: number[] = [];
-  let depth = 0;
-  let inStr = false;
-  let escape = false;
+  let depth = 0, inStr = false, escape = false;
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
     if (escape) { escape = false; continue; }
@@ -287,7 +315,7 @@ function findCloseCandidates(s: string): number[] {
     if (c === '{' || c === '[') depth++;
     else if (c === '}' || c === ']') {
       depth--;
-      if (depth === 0) out.unshift(i + 1); // most-recent close first
+      if (depth === 0) out.unshift(i + 1);
     }
   }
   return out.slice(0, 5);

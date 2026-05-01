@@ -114,15 +114,16 @@ function tryParseJson(s: string): ParseResult {
 }
 
 /** Parse JSON, trying progressively shorter prefixes if the input was
- *  truncated mid-object (we cap responses at 12 KB on the backend, which
- *  can chop a long file array). Returns undefined if nothing parses. */
+ *  truncated mid-object (we cap responses at 40 KB on the backend, which
+ *  can still chop a long file array). Returns undefined if nothing parses. */
 function parseJsonForgiving(s: string): unknown | undefined {
   const trimmed = s.trim();
   if (!trimmed) return undefined;
-  // First: parse as-is
+  // 1. Parse as-is
   try { return JSON.parse(trimmed); } catch { /* fall through */ }
-  // Second: walk the string and try every position where we just closed
-  // a top-level object/array
+
+  // 2. Walk the string and try every position where we just closed a top-
+  //    level object/array
   let depth = 0, inStr = false, escape = false;
   const candidates: number[] = [];
   for (let i = 0; i < trimmed.length; i++) {
@@ -139,6 +140,80 @@ function parseJsonForgiving(s: string): unknown | undefined {
   }
   for (const end of candidates.slice(0, 6)) {
     try { return JSON.parse(trimmed.slice(0, end)); } catch { /* try next */ }
+  }
+
+  // 3. Repair: rebalance brackets / close strings / strip trailing commas
+  //    so we can parse a syntactically-completed version of the truncated
+  //    content. This is what salvages 30 KB+ multi-file responses where the
+  //    truncation happened mid-`"content": "..."` of one file.
+  const repaired = tryRepairJson(trimmed);
+  if (repaired !== undefined) return repaired;
+
+  return undefined;
+}
+
+/**
+ * Attempt to make truncated JSON parseable by closing any unclosed string,
+ * stripping a dangling escape, removing the last (likely incomplete) entry
+ * of the deepest container, and appending the missing closing brackets.
+ *
+ * Doesn't try to be perfect — just good enough that JsonProse can render
+ * the high-level shape (e.g. "Files (3): src/Foo.java, src/Bar.java, …")
+ * even if the last entry is partial.
+ */
+function tryRepairJson(s: string): unknown | undefined {
+  // Walk the string and track structural state
+  let inStr = false;
+  let escape = false;
+  const stack: ('O' | 'A')[] = [];
+  // Position of the start of the deepest currently-open container's last
+  // entry (used to lop off a partial trailing entry on repair)
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (escape) { escape = false; continue; }
+    if (c === '\\') { escape = true; continue; }
+    if (c === '"')  { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (c === '{') stack.push('O');
+    else if (c === '[') stack.push('A');
+    else if (c === '}' || c === ']') stack.pop();
+  }
+
+  if (stack.length === 0 && !inStr) return undefined; // already balanced — first parse would have worked
+
+  let repaired = s;
+
+  // Strip dangling escape backslash
+  if (escape) repaired = repaired.slice(0, -1);
+
+  // Close an open string. If we were inside a string, the JSON parser will
+  // be unhappy with whatever comes after — close it cleanly.
+  if (inStr) repaired += '"';
+
+  // Strip whitespace + trailing comma so we don't end on something like `,`
+  repaired = repaired.replace(/[\s,]+$/, '');
+
+  // If the deepest container was an array or object and we ended right after
+  // a partial entry (no comma), JSON might be like `[ {a:1}, {a:2 ` — that's
+  // fine, the next step closes brackets which produces `[{a:1}, {a:2}]`.
+  // But if it was `[ {a:1}, {` (we just opened a new entry that has no
+  // content), strip it.
+  // Keep this simple — try the close first; on failure trim more.
+  for (let attempt = 0; attempt < 4; attempt++) {
+    let candidate = repaired;
+    // Append missing closes
+    for (let i = stack.length - 1; i >= 0; i--) {
+      candidate += stack[i] === 'O' ? '}' : ']';
+    }
+    try { return JSON.parse(candidate); } catch { /* fall through */ }
+    // Trim back to the previous comma/colon/open-bracket to drop the partial entry
+    const cut = Math.max(
+      repaired.lastIndexOf(','),
+      repaired.lastIndexOf('['),
+      repaired.lastIndexOf('{'),
+    );
+    if (cut <= 0) break;
+    repaired = repaired.slice(0, cut).replace(/[\s,]+$/, '');
   }
   return undefined;
 }
