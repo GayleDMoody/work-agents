@@ -97,6 +97,19 @@ _autodetect_connections()
 # Agent definitions
 AGENTS = [
     {
+        "id": "investigator",
+        "name": "Investigator",
+        "role": "Discovery Agent",
+        "description": "Searches local clones + GitHub PRs for ticket signals before agents run; decides if existing work is sufficient.",
+        "status": "idle",
+        "total_runs": 0,
+        "successful_runs": 0,
+        "total_cost": 0.0,
+        "capabilities": ["repo_discovery", "pr_analysis"],
+        "model": "claude-haiku-4-5-20251001",
+        "current_task": "",
+    },
+    {
         "id": "product",
         "name": "Product Agent",
         "role": "Product Analyst",
@@ -451,6 +464,56 @@ async def trigger_pipeline(req: TriggerPipelineRequest):
 
             orchestrator.on_event(on_event)
             run_started = datetime.now(timezone.utc)
+
+            # If the user did NOT pick a repo, run the Investigator first to
+            # discover candidate repos + open PRs. The Investigator may decide
+            # the ticket is already addressed by an open PR, in which case we
+            # short-circuit and skip the full agent pipeline.
+            investigation_result = None
+            if not (req.repo_kind and req.repo_id):
+                investigation_result = await _run_investigation(run, req.ticket_key)
+                if investigation_result:
+                    # Persist as an artifact so the dashboard renders it
+                    run["artifacts"].append(investigation_result.to_artifact())
+
+                    v = investigation_result.verdict
+                    if v.sufficient and v.existing_pr_url:
+                        # Short-circuit: existing PR is sufficient; no agent run needed.
+                        run["status"] = "completed"
+                        run["current_phase"] = "no_work_needed"
+                        run["pr_url"] = v.existing_pr_url
+                        # Try to extract owner/repo + number for the dashboard "View PR" badge
+                        import re as _re
+                        m = _re.search(r"github\.com/([^/]+/[^/]+)/pull/(\d+)", v.existing_pr_url)
+                        if m:
+                            run["pr_repo"] = m.group(1)
+                            try: run["pr_number"] = int(m.group(2))
+                            except Exception: pass
+                        run["duration_seconds"] = round(
+                            (datetime.now(timezone.utc) - run_started).total_seconds(), 2
+                        )
+                        run["events"].append({
+                            "type": "investigation_short_circuit",
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "message": f"Existing PR sufficient: {v.existing_pr_url}",
+                        })
+                        await broadcast_event("pipeline_complete", {"run_id": run_id, "success": True, "short_circuit": True})
+                        log.info("investigation_short_circuit", run_id=run_id, pr=v.existing_pr_url)
+                        return  # done — skip the agent pipeline
+
+                    # Otherwise: pick a repo from the investigation if there is one
+                    chosen_path, chosen_kind, chosen_id = _choose_repo_from_investigation(investigation_result)
+                    if chosen_id:
+                        req.repo_kind = chosen_kind
+                        req.repo_id = chosen_id
+                        run["repo_kind"] = chosen_kind
+                        run["repo_id"] = chosen_id
+                        run["repo_path"] = chosen_path or ""
+                        run["events"].append({
+                            "type": "investigation_repo_picked",
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "message": f"Auto-picked target repo from investigation: {chosen_id} ({chosen_kind})",
+                        })
 
             # Build a repo-context block (file tree + relevant existing files)
             # if the trigger picked one. This gets prepended to every agent's
@@ -1342,6 +1405,79 @@ async def publish_pr_local(run_id: str, req: PublishPRLocalRequest):
         "number": pr_number,
         "warning": result.error or "",
     }
+
+
+async def _run_investigation(run: dict[str, Any], ticket_key: str):
+    """Resolve the ticket + run repo / PR discovery + Claude assessment.
+    Returns an InvestigationResult, or None if it can't run (no token, etc.)."""
+    try:
+        from src.agents.investigator import investigate
+        from src.integrations import github_oauth
+        from src.orchestrator.engine import _resolve_ticket
+        from src.settings import Settings
+
+        s = Settings()
+        token = ""
+        t = github_oauth.get_tokens()
+        if t:
+            token = t.access_token
+
+        ticket = await _resolve_ticket(ticket_key)
+        run["events"].append({
+            "type": "investigation_started",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "message": f"Investigator scanning local clones + GitHub PRs for {ticket_key}…",
+        })
+        result = await investigate(
+            ticket_key=ticket_key,
+            ticket=ticket,
+            local_root=s.github.local_repos_root,
+            github_token=token,
+            model=s.anthropic.default_model,
+        )
+        run["events"].append({
+            "type": "investigation_complete",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "message": (f"Investigation: {'sufficient' if result.verdict.sufficient else 'work needed'}. "
+                        f"{result.verdict.reasoning[:120]}"),
+        })
+        return result
+    except Exception as e:
+        log.warning("investigation_failed", ticket_key=ticket_key, error=str(e)[:200])
+        run["events"].append({
+            "type": "investigation_failed",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "message": f"Investigator failed: {str(e)[:200]}",
+        })
+        return None
+
+
+def _choose_repo_from_investigation(investigation_result) -> tuple[str, str, str]:
+    """Pick (repo_path, kind, id) from an investigation result.
+    Prefers a local clone (faster + can apply changes) when available."""
+    v = investigation_result.verdict
+    d = investigation_result.dossier
+    # 1) If Claude named a target_repo, find it in the dossier
+    target_names = [t.strip() for t in (v.target_repos or []) if t and t.strip()]
+    if target_names:
+        first = target_names[0]
+        # Match against local evidence first (by name OR by github remote owner/repo)
+        for ev in d.local_evidence:
+            from src.integrations.local_repo import parse_github_owner_repo
+            gh = parse_github_owner_repo(ev.remote)
+            full = f"{gh[0]}/{gh[1]}" if gh else ""
+            if first == ev.repo_name or first == ev.repo_path or first == full:
+                return ev.repo_path, "local", ev.repo_name
+        # Fall through to GitHub if local doesn't match
+        return "", "github", first
+    # 2) Otherwise use the dossier's auto-pick — prefer local
+    if d.recommended_repo_local:
+        from pathlib import Path
+        name = Path(d.recommended_repo_local).name
+        return d.recommended_repo_local, "local", name
+    if d.recommended_repo_github:
+        return "", "github", d.recommended_repo_github
+    return "", "", ""
 
 
 async def _build_repo_context_block(run: dict[str, Any], kind: str, repo_id: str) -> str:

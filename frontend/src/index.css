@@ -1384,6 +1384,28 @@ tr:hover td { background: var(--bg-hover); }
   margin-top: 4px;
 }
 
+/* --- Investigator short-circuit banner --- */
+.dashboard-shortcircuit-banner {
+  position: absolute;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 90;
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  background: rgba(63,185,80,0.12);
+  border: 1px solid rgba(63,185,80,0.4);
+  border-radius: 10px;
+  color: var(--text-primary);
+  box-shadow: 0 12px 28px rgba(0,0,0,0.4);
+  max-width: 640px;
+}
+.dashboard-shortcircuit-text { display: flex; flex-direction: column; }
+.dashboard-shortcircuit-title { font-size: 13px; font-weight: 700; color: #3fb950; }
+.dashboard-shortcircuit-sub   { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+
 /* --- Dashboard "View output" button --- */
 .dashboard-view-artifacts {
   position: absolute;

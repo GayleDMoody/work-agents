@@ -108,6 +108,31 @@ export default function Dashboard() {
           View output ({latestRunWithArtifacts.ticket_key})
         </button>
       )}
+      {/* Banner shown when the Investigator short-circuited the pipeline because
+          it found an existing PR that already addresses the ticket. Looks for the
+          most recent run with current_phase='no_work_needed' and a pr_url. */}
+      {(() => {
+        const sc = (dash.recent_runs || []).find(
+          r => r.current_phase === 'no_work_needed' && r.pr_url,
+        );
+        if (!sc) return null;
+        return (
+          <div className="dashboard-shortcircuit-banner">
+            <span style={{ fontSize: 18 }}>✓</span>
+            <div className="dashboard-shortcircuit-text">
+              <div className="dashboard-shortcircuit-title">
+                Existing PR sufficient — no agent work needed for {sc.ticket_key}
+              </div>
+              <div className="dashboard-shortcircuit-sub">
+                Investigator found an open PR that already addresses this ticket.
+              </div>
+            </div>
+            <a className="btn btn-primary" href={sc.pr_url} target="_blank" rel="noopener noreferrer">
+              View PR →
+            </a>
+          </div>
+        );
+      })()}
       {chatAgent && (
         <ChatPopup agentId={chatAgent} onClose={() => setChatAgent(null)} />
       )}

@@ -14,6 +14,7 @@ import type { AgentThought } from '../api/client';
 import { useAgentThoughts, replayAgentThoughts } from '../hooks/useAgentThoughts';
 
 const AGENT_VISUALS: Record<string, { color: string; label: string; icon: string }> = {
+  investigator:{ color: '#79c0ff', label: 'Investigator', icon: '🔍' },
   product:     { color: '#bc8cff', label: 'Product',   icon: '📋' },
   pm:          { color: '#58a6ff', label: 'PM',        icon: '📊' },
   architect:   { color: '#f0883e', label: 'Architect', icon: '🏗️' },
