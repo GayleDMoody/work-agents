@@ -31,7 +31,11 @@ export default function FormattedThought({ content, maxChars = 600 }: Props) {
     return (
       <div className="ft-root ft-json">
         {parsed.preamble && <div className="ft-pre">{parsed.preamble}</div>}
-        <JsonNode value={parsed.value} keyName={null} depth={0} />
+        <JsonProse value={parsed.value} />
+        <details className="ft-details">
+          <summary className="ft-details-summary">Show full structure</summary>
+          <JsonNode value={parsed.value} keyName={null} depth={0} />
+        </details>
       </div>
     );
   }
@@ -76,18 +80,21 @@ function tryParseJson(s: string): ParseResult {
   if (!s) return { kind: 'text' };
   const trimmed = s.trim();
 
-  // Fenced code blocks first — common in agent responses
+  // Fenced code blocks first — common in agent responses. Even an UNCLOSED
+  // fence (truncated content) is treated as a JSON candidate.
   const fenced = extractFencedBlocks(trimmed);
-  if (fenced.blocks.length > 0) {
-    // If the block is JSON, flatten to the JSON path
-    if (fenced.blocks.length === 1 && (fenced.blocks[0].lang === 'json' || fenced.blocks[0].lang === '')) {
-      const body = fenced.blocks[0].body.trim();
-      if (looksLikeJson(body)) {
-        try { return { kind: 'json', value: JSON.parse(body), preamble: fenced.preamble }; }
-        catch { /* fall through */ }
-      }
+  const fencePrefix = trimmed.match(/^```(json)?\s*\n/i);
+  if (fenced.blocks.length > 0 || fencePrefix) {
+    // Try to parse the first block as JSON (even if truncated)
+    const body = fenced.blocks[0]?.body
+      ?? trimmed.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '');
+    const parsed = parseJsonForgiving(body);
+    if (parsed !== undefined) {
+      return { kind: 'json', value: parsed, preamble: fenced.preamble || '' };
     }
-    return { kind: 'code', blocks: fenced.blocks, preamble: fenced.preamble };
+    if (fenced.blocks.length > 0) {
+      return { kind: 'code', blocks: fenced.blocks, preamble: fenced.preamble };
+    }
   }
 
   // No fences — try to find a JSON object/array by locating the first { or [
@@ -97,14 +104,43 @@ function tryParseJson(s: string): ParseResult {
   }));
   if (firstBrace !== Infinity) {
     const candidate = trimmed.slice(firstBrace);
-    if (looksLikeJson(candidate)) {
-      try {
-        return { kind: 'json', value: JSON.parse(candidate), preamble: trimmed.slice(0, firstBrace).trim() };
-      } catch { /* not parseable */ }
+    const parsed = parseJsonForgiving(candidate);
+    if (parsed !== undefined) {
+      return { kind: 'json', value: parsed, preamble: trimmed.slice(0, firstBrace).trim() };
     }
   }
 
   return { kind: 'text' };
+}
+
+/** Parse JSON, trying progressively shorter prefixes if the input was
+ *  truncated mid-object (we cap responses at 12 KB on the backend, which
+ *  can chop a long file array). Returns undefined if nothing parses. */
+function parseJsonForgiving(s: string): unknown | undefined {
+  const trimmed = s.trim();
+  if (!trimmed) return undefined;
+  // First: parse as-is
+  try { return JSON.parse(trimmed); } catch { /* fall through */ }
+  // Second: walk the string and try every position where we just closed
+  // a top-level object/array
+  let depth = 0, inStr = false, escape = false;
+  const candidates: number[] = [];
+  for (let i = 0; i < trimmed.length; i++) {
+    const c = trimmed[i];
+    if (escape) { escape = false; continue; }
+    if (c === '\\') { escape = true; continue; }
+    if (c === '"')  { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (c === '{' || c === '[') depth++;
+    else if (c === '}' || c === ']') {
+      depth--;
+      if (depth === 0) candidates.unshift(i + 1);
+    }
+  }
+  for (const end of candidates.slice(0, 6)) {
+    try { return JSON.parse(trimmed.slice(0, end)); } catch { /* try next */ }
+  }
+  return undefined;
 }
 
 function looksLikeJson(s: string): boolean {
@@ -126,6 +162,185 @@ function extractFencedBlocks(s: string): { preamble: string; blocks: { lang: str
     preamble: preambleEnd === -1 ? '' : s.slice(0, preambleEnd).trim(),
     blocks,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Human-readable JSON prose
+// ---------------------------------------------------------------------------
+
+/**
+ * Renders a JSON object as readable English by surfacing well-known fields
+ * (summary, decision, rationale, files, acceptance_criteria, etc.) in a
+ * natural format. This is the default view a user sees — the full JSON tree
+ * is folded under a "Show full structure" disclosure below.
+ */
+function JsonProse({ value }: { value: unknown }) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'object') {
+    return <div className="ft-prose-line">{String(value)}</div>;
+  }
+  if (Array.isArray(value)) {
+    return (
+      <div className="ft-prose">
+        <div className="ft-prose-meta">List of {value.length} item{value.length === 1 ? '' : 's'}</div>
+        {value.slice(0, 6).map((item, i) => (
+          <ProseItem key={i} value={item} />
+        ))}
+        {value.length > 6 && <div className="ft-prose-more">+{value.length - 6} more…</div>}
+      </div>
+    );
+  }
+  const obj = value as Record<string, unknown>;
+
+  // Surface the highest-priority readable fields first
+  const rendered = new Set<string>();
+  const pieces: React.ReactNode[] = [];
+
+  // 1. The "main message" fields (one-line text)
+  for (const k of ['plan_summary', 'summary', 'verdict', 'decision', 'rationale', 'reasoning', 'approach', 'description', 'response', 'message']) {
+    const v = obj[k];
+    if (typeof v === 'string' && v.trim()) {
+      pieces.push(
+        <div key={k} className="ft-prose-headline">
+          <span className="ft-prose-label">{prettyLabel(k)}:</span> {v.trim()}
+        </div>,
+      );
+      rendered.add(k);
+    }
+  }
+
+  // 2. Multi-item "what's in this" arrays
+  for (const k of ['acceptance_criteria', 'clarification_questions', 'edge_cases', 'risks', 'comments', 'security_issues',
+                   'performance_concerns', 'questions_for_reviewer', 'followups', 'agents_needed', 'agents_not_needed',
+                   'tags', 'patterns', 'dependencies', 'open_questions', 'breaking_changes',
+                   'files', 'test_files', 'config_files', 'files_to_create', 'files_to_modify',
+                   'env_vars_needed', 'migrations', 'api_changes', 'tests_added',
+                   'steps', 'parallel_groups']) {
+    const v = obj[k];
+    if (Array.isArray(v) && v.length > 0) {
+      pieces.push(
+        <div key={k} className="ft-prose-section">
+          <div className="ft-prose-label">{prettyLabel(k)} ({v.length})</div>
+          <ul className="ft-prose-list">
+            {v.slice(0, 8).map((item, i) => (
+              <li key={i}><ProseItem value={item} compact /></li>
+            ))}
+            {v.length > 8 && <li className="ft-prose-more">+{v.length - 8} more…</li>}
+          </ul>
+        </div>,
+      );
+      rendered.add(k);
+    }
+  }
+
+  // 3. Nested "result" / "metadata" / similar structured fields — fold them
+  //    inside their own disclosures so the surface stays uncluttered.
+  for (const k of Object.keys(obj)) {
+    if (rendered.has(k)) continue;
+    const v = obj[k];
+    if (typeof v === 'string' && v.trim()) {
+      pieces.push(
+        <div key={k} className="ft-prose-line">
+          <span className="ft-prose-label">{prettyLabel(k)}:</span> {clip(v, 240)}
+        </div>,
+      );
+    } else if (typeof v === 'number' || typeof v === 'boolean') {
+      pieces.push(
+        <div key={k} className="ft-prose-line">
+          <span className="ft-prose-label">{prettyLabel(k)}:</span> {String(v)}
+        </div>,
+      );
+    } else if (v && typeof v === 'object' && !Array.isArray(v)) {
+      // Render nested objects as "key: 3 fields" with a tooltip
+      const childKeys = Object.keys(v as Record<string, unknown>);
+      pieces.push(
+        <div key={k} className="ft-prose-line ft-prose-line--nested">
+          <span className="ft-prose-label">{prettyLabel(k)}:</span> <span className="ft-prose-meta">{childKeys.length} fields ({childKeys.slice(0, 3).join(', ')}{childKeys.length > 3 ? '…' : ''})</span>
+        </div>,
+      );
+    } else if (Array.isArray(v)) {
+      pieces.push(
+        <div key={k} className="ft-prose-line">
+          <span className="ft-prose-label">{prettyLabel(k)}:</span> <span className="ft-prose-meta">{v.length} item{v.length === 1 ? '' : 's'}</span>
+        </div>,
+      );
+    }
+  }
+
+  return <div className="ft-prose">{pieces}</div>;
+}
+
+function ProseItem({ value, compact = false }: { value: unknown; compact?: boolean }) {
+  if (value === null || value === undefined) return <span className="ft-null">none</span>;
+  if (typeof value === 'string') return <span>{compact ? clip(value, 200) : value}</span>;
+  if (typeof value === 'number' || typeof value === 'boolean') return <span>{String(value)}</span>;
+
+  if (Array.isArray(value)) {
+    return <span className="ft-prose-meta">[{value.length} item{value.length === 1 ? '' : 's'}]</span>;
+  }
+  const obj = value as Record<string, unknown>;
+
+  // file-like { path, action, content }
+  if (typeof obj.path === 'string' || typeof obj.filename === 'string') {
+    const path = String(obj.path ?? obj.filename ?? '');
+    const action = String(obj.action ?? obj.status ?? '');
+    return (
+      <span>
+        {action && <span className={`ft-prose-pill ft-prose-pill--${action}`}>{action}</span>}
+        <code>{path}</code>
+        {typeof obj.description === 'string' && obj.description && <> — {clip(obj.description, 80)}</>}
+      </span>
+    );
+  }
+
+  // step-like { agent, task }
+  if (typeof obj.agent === 'string' && typeof obj.task === 'string') {
+    return <span><span className="ft-prose-pill">{obj.agent}</span>{clip(obj.task, 200)}</span>;
+  }
+
+  // comment-like { file, line, severity, comment }
+  if (typeof obj.comment === 'string') {
+    return (
+      <span>
+        {typeof obj.severity === 'string' && <span className={`ft-prose-pill ft-prose-pill--${obj.severity}`}>{obj.severity}</span>}
+        {typeof obj.file === 'string' && <code>{obj.file}{obj.line ? `:${obj.line}` : ''}</code>}{' '}
+        {clip(obj.comment as string, 200)}
+      </span>
+    );
+  }
+
+  // question-like { question, owner / for_team }
+  if (typeof obj.question === 'string') {
+    const owner = (obj.owner ?? obj.for_team ?? obj.should_ask) as string | undefined;
+    return (
+      <span>
+        {owner && <span className="ft-prose-pill">{owner}</span>}
+        {clip(obj.question, 240)}
+      </span>
+    );
+  }
+
+  // generic fallback — pull a few key fields
+  const interestingKeys = Object.keys(obj).filter(k => typeof obj[k] === 'string' || typeof obj[k] === 'number').slice(0, 3);
+  if (interestingKeys.length > 0) {
+    return (
+      <span>
+        {interestingKeys.map((k, i) => (
+          <span key={k}>{i > 0 && ' · '}<span className="ft-prose-label">{k}:</span> {clip(String(obj[k]), 80)}</span>
+        ))}
+      </span>
+    );
+  }
+  return <span className="ft-prose-meta">[object with {Object.keys(obj).length} keys]</span>;
+}
+
+function prettyLabel(key: string): string {
+  return key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function clip(s: string, max: number): string {
+  if (!s) return '';
+  return s.length > max ? s.slice(0, max - 1) + '…' : s;
 }
 
 // ---------------------------------------------------------------------------

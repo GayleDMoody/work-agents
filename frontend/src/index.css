@@ -1281,8 +1281,9 @@ tr:hover td { background: var(--bg-hover); }
 
 .agent-card-body {
   border-top: 1px solid rgba(255,255,255,0.04);
-  max-height: 460px;
-  overflow-y: auto;
+  /* No fixed max-height — let the parent .agent-sidebar-body scroll. Each
+     individual card can still be long; an outer scroll keeps everything
+     reachable without nested scrollbars. */
   padding: 8px;
   display: flex; flex-direction: column; gap: 6px;
 }
@@ -1337,6 +1338,56 @@ tr:hover td { background: var(--bg-hover); }
   padding: 4px 0 0; cursor: pointer; font-family: inherit;
 }
 .ft-toggle:hover { text-decoration: underline; }
+
+/* JSON prose — readable English summary of structured agent output */
+.ft-prose {
+  font-family: -apple-system, system-ui, sans-serif;
+  font-size: 12px;
+  line-height: 1.55;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.ft-prose-headline {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+.ft-prose-section { margin-top: 2px; }
+.ft-prose-line, .ft-prose-line--nested { color: var(--text-secondary); }
+.ft-prose-line code { font-size: 11px; padding: 1px 5px; background: rgba(255,255,255,0.05); border-radius: 3px; }
+.ft-prose-label {
+  font-weight: 700; color: #79c0ff;
+  text-transform: capitalize; margin-right: 4px;
+}
+.ft-prose-meta { color: var(--text-muted); font-style: italic; }
+.ft-prose-list { padding-left: 16px; margin: 4px 0 0; display: flex; flex-direction: column; gap: 3px; }
+.ft-prose-list li { color: var(--text-secondary); font-size: 11.5px; line-height: 1.5; }
+.ft-prose-list code { font-size: 10.5px; padding: 1px 4px; background: rgba(255,255,255,0.05); border-radius: 3px; }
+.ft-prose-more { color: var(--text-muted); font-style: italic; }
+
+.ft-prose-pill {
+  display: inline-block;
+  font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px;
+  padding: 1px 6px; border-radius: 3px;
+  background: rgba(88,166,255,0.16); color: var(--accent);
+  margin-right: 4px;
+}
+.ft-prose-pill--create   { background: rgba(63,185,80,0.16); color: #3fb950; }
+.ft-prose-pill--modify   { background: rgba(210,153,34,0.16); color: #d29922; }
+.ft-prose-pill--delete   { background: rgba(248,81,73,0.18); color: #f85149; }
+.ft-prose-pill--critical { background: rgba(248,81,73,0.22); color: #f85149; }
+.ft-prose-pill--major    { background: rgba(240,136,62,0.20); color: #f0883e; }
+.ft-prose-pill--minor    { background: rgba(210,153,34,0.16); color: #d29922; }
+
+.ft-details { margin-top: 8px; }
+.ft-details-summary {
+  cursor: pointer;
+  font-size: 10px; font-weight: 700; letter-spacing: .3px;
+  color: var(--text-muted); text-transform: uppercase;
+  padding: 4px 0;
+  user-select: none;
+}
+.ft-details-summary:hover { color: var(--accent); }
+.ft-details[open] .ft-details-summary { color: var(--accent); margin-bottom: 6px; }
 
 /* JSON tree */
 .ft-json { font-size: 11px; line-height: 1.55; }

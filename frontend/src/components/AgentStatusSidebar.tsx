@@ -189,15 +189,106 @@ function thoughtMeta(t: AgentThought): { icon: React.ReactNode; label: string; t
 }
 
 function thoughtSummary(t: AgentThought): string {
-  // First non-empty line, capped
-  const first = (t.content || '').split('\n').find(l => l.trim()) || '';
-  const truncated = first.length > 60 ? first.slice(0, 59) + '…' : first;
+  const summary = humanSummary(t.content);
   switch (t.kind) {
-    case 'prompt':           return `Thinking: ${truncated}`;
-    case 'response':         return truncated;
-    case 'error':            return `Error: ${truncated}`;
-    case 'message_sent':     return `Sent: ${truncated}`;
-    case 'message_received': return `Received: ${truncated}`;
-    default:                 return truncated;
+    case 'prompt':           return `Thinking: ${summary}`;
+    case 'response':         return summary;
+    case 'error':            return `Error: ${summary}`;
+    case 'message_sent':     return `Sent: ${summary}`;
+    case 'message_received': return `Received: ${summary}`;
+    default:                 return summary;
   }
+}
+
+/** Build a 1-line human-readable summary from arbitrary agent content.
+ *  Skips markdown fences, strips obvious JSON syntax, and surfaces the
+ *  most useful field (summary / decision / title / approach / verdict). */
+function humanSummary(content: string): string {
+  const text = (content || '').trim();
+  if (!text) return '(no content)';
+
+  // Try to find a JSON object anywhere in the content
+  const json = tryExtractJson(text);
+  if (json && typeof json === 'object' && !Array.isArray(json)) {
+    const obj = json as Record<string, unknown>;
+    // Look for canonical "main message" fields, in priority order
+    const fieldPriority = [
+      'plan_summary', 'summary', 'rationale', 'reasoning',
+      'verdict', 'decision', 'approach',
+      'title', 'description',
+      'response', 'content', 'message',
+    ];
+    for (const key of fieldPriority) {
+      const v = obj[key];
+      if (typeof v === 'string' && v.trim()) return clip(v.trim());
+    }
+    // Fallback: list the top-level keys
+    const keys = Object.keys(obj);
+    if (keys.length > 0) return `JSON with ${keys.length} field${keys.length === 1 ? '' : 's'}: ${keys.slice(0, 4).join(', ')}${keys.length > 4 ? '…' : ''}`;
+  }
+
+  // Plain text: skip blank lines + markdown fences and pull the first real sentence
+  const lines = text.split('\n');
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (line.startsWith('```')) continue;            // fence
+    if (line.startsWith('#')) continue;              // markdown heading
+    if (/^[{\[]\s*$/.test(line)) continue;           // bare brace
+    if (/^[}\]],?\s*$/.test(line)) continue;         // bare close
+    if (/^"[^"]*":\s*[{\[]\s*$/.test(line)) continue; // "key": {
+    return clip(line);
+  }
+  return clip(text);
+}
+
+function clip(s: string, max = 70): string {
+  const oneLine = s.replace(/\s+/g, ' ').trim();
+  return oneLine.length > max ? oneLine.slice(0, max - 1) + '…' : oneLine;
+}
+
+function tryExtractJson(text: string): unknown | null {
+  // Strip surrounding markdown fences first
+  const fenced = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+  const candidate = fenced ? fenced[1] : text;
+  // Find the first { or [
+  const firstBrace = Math.min(
+    ...['{', '['].map(c => {
+      const i = candidate.indexOf(c);
+      return i === -1 ? Infinity : i;
+    }),
+  );
+  if (firstBrace === Infinity) return null;
+  // Try parsing progressively shorter slices in case the content was truncated
+  // mid-object (we cap at 12 KB on the backend).
+  const start = candidate.slice(firstBrace);
+  for (const end of [start.length, ...findCloseCandidates(start)]) {
+    try {
+      return JSON.parse(start.slice(0, end));
+    } catch { /* try next */ }
+  }
+  return null;
+}
+
+function findCloseCandidates(s: string): number[] {
+  // Walk the string and emit candidate end-indexes at every position where
+  // we've just closed a top-level object/array. Lets us salvage truncated
+  // JSON by parsing only the prefix that's syntactically complete.
+  const out: number[] = [];
+  let depth = 0;
+  let inStr = false;
+  let escape = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (escape) { escape = false; continue; }
+    if (c === '\\') { escape = true; continue; }
+    if (c === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (c === '{' || c === '[') depth++;
+    else if (c === '}' || c === ']') {
+      depth--;
+      if (depth === 0) out.unshift(i + 1); // most-recent close first
+    }
+  }
+  return out.slice(0, 5);
 }
